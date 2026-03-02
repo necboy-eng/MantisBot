@@ -173,11 +173,14 @@ export async function main(): Promise<void> {
 
   // Initialize CronService
   console.log('[Entry] Initializing CronService...');
-  const cronExecutor = new CronExecutor(
-    getChannelRegistry(),
-    agentRunner,
-    sessionManager
-  );
+  const cronExecutor = new CronExecutor({
+    channelRegistry: getChannelRegistry(),
+    sessionManager,
+    toolRegistry,
+    skillsLoader,
+    pluginSkillsPrompt,
+    defaultModel: config.defaultModel || config.models[0]?.name,
+  });
 
   const cronService = new CronService({
     storePath: path.join(workspace, 'cron', 'jobs.json'),

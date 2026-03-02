@@ -1,15 +1,22 @@
 import type { ChannelRegistry } from '../channels/registry.js';
-import type { IAgentRunner } from '../agents/unified-runner.js';
 import type { SessionManager } from '../session/manager.js';
 import type { CronJob } from './service.js';
 import type { FileAttachment } from '../types.js';
+import type { ToolRegistry } from '../agents/tools/registry.js';
+import type { SkillsLoader } from '../agents/skills/loader.js';
+import { UnifiedAgentRunner } from '../agents/unified-runner.js';
+
+export interface CronExecutorDeps {
+  channelRegistry: ChannelRegistry;
+  sessionManager: SessionManager;
+  toolRegistry: ToolRegistry;
+  skillsLoader: SkillsLoader;
+  pluginSkillsPrompt: string;
+  defaultModel?: string;
+}
 
 export class CronExecutor {
-  constructor(
-    private channelRegistry: ChannelRegistry,
-    private agentRunner: IAgentRunner,
-    private sessionManager: SessionManager
-  ) {}
+  constructor(private deps: CronExecutorDeps) {}
 
   /**
    * 执行任务 payload
@@ -19,9 +26,8 @@ export class CronExecutor {
 
     try {
       if (payload.kind === 'systemEvent') {
-        // 为 systemEvent 也创建 session 并存储消息（实现历史留存）
         const sessionId = this.getOrCreateSession(job);
-        this.sessionManager.addMessage(sessionId, {
+        this.deps.sessionManager.addMessage(sessionId, {
           role: 'assistant',
           content: payload.text
         });
@@ -29,25 +35,34 @@ export class CronExecutor {
       } else if (payload.kind === 'agentTurn') {
         const sessionId = this.getOrCreateSession(job);
 
-        console.log(`[CronExecutor] Executing agentTurn for job ${job.id}, sessionId: ${sessionId}`);
-        const response = await this.agentRunner.run(
-          payload.message,
-          []
-        );
-        console.log(`[CronExecutor] Agent response received, length: ${response.response?.length || 0}, attachments: ${response.attachments?.length || 0}`);
+        // 按任务配置构建 skillsPrompt（空列表 = 禁用所有）
+        const enabledSkills = payload.skills ?? [];
+        const standalonePrompt = this.deps.skillsLoader.getPromptContent(enabledSkills);
+        const skillsPrompt = standalonePrompt +
+          (this.deps.pluginSkillsPrompt ? '\n\n' + this.deps.pluginSkillsPrompt : '');
 
-        // Deliver response if delivery is configured and there's a response
+        // 为每次执行创建独立 runner，使用任务指定的模型
+        const runner = new UnifiedAgentRunner(this.deps.toolRegistry, {
+          model: payload.model || this.deps.defaultModel,
+          maxIterations: 50,
+          pluginSkillsPrompt: skillsPrompt,
+        });
+
+        console.log(`[CronExecutor] Job ${job.id}: model=${payload.model || this.deps.defaultModel}, skills=${enabledSkills.join(',') || 'none'}`);
+
+        const response = await runner.run(payload.message, []);
+        console.log(`[CronExecutor] Agent response received, length: ${response.response?.length || 0}`);
+
         if (delivery && delivery.mode !== 'none' && response.response) {
-          // 先存储消息到 session（实现历史留存）
-          this.sessionManager.addMessage(sessionId, {
+          this.deps.sessionManager.addMessage(sessionId, {
             role: 'assistant',
             content: response.response,
             attachments: response.attachments
           });
-
-          // 然后投递消息（包含附件）
           await this.deliverMessage(response.response, delivery, sessionId, response.attachments);
         }
+
+        runner.dispose?.();
       }
     } catch (error) {
       console.error(`[CronExecutor] Job ${job.id} execution failed:`, error);
@@ -68,7 +83,7 @@ export class CronExecutor {
 
     try {
       const channelId = this.resolveChannel(delivery.channel);
-      const channel = this.channelRegistry.getByPlatform(channelId);
+      const channel = this.deps.channelRegistry.getByPlatform(channelId);
 
       if (!channel) {
         console.warn(`[CronExecutor] Channel not found: ${channelId}`);
@@ -78,9 +93,8 @@ export class CronExecutor {
         return;
       }
 
-      // Use the provided sessionId if available, otherwise resolve from delivery config
       const chatId = sessionIdForDelivery || await this.resolveChatId(channelId, delivery.to);
-      console.log(`[CronExecutor] Delivering message to channel ${channelId}, chatId: ${chatId}, attachments: ${attachments?.length || 0}`);
+      console.log(`[CronExecutor] Delivering to channel ${channelId}, chatId: ${chatId}`);
       await channel.sendMessage(chatId, message, attachments);
     } catch (error) {
       console.error('[CronExecutor] Message delivery failed:', error);
@@ -90,39 +104,24 @@ export class CronExecutor {
     }
   }
 
-  /**
-   * 解析渠道（支持 "last" 模式）
-   */
   private resolveChannel(channel?: string | "last"): string {
-    if (!channel || channel === "last") {
-      return "web";  // HTTPWSChannel 的 platform 是 'web'
-    }
+    if (!channel || channel === "last") return "web";
     return channel;
   }
 
-  /**
-   * 获取或创建会话
-   */
   private getOrCreateSession(job: CronJob): string {
     const { sessionTarget } = job;
+    if (sessionTarget === 'main') return 'main';
 
-    if (sessionTarget === 'main') {
-      return 'main';
-    } else {
-      const sessionKey = `cron:${job.id}`;
-      let session = this.sessionManager.getSession(sessionKey);
-      if (!session) {
-        // 使用任务名称作为 session 名称
-        session = this.sessionManager.createSession(sessionKey, 'default', job.name);
-      }
-      return session.id;
+    const sessionKey = `cron:${job.id}`;
+    let session = this.deps.sessionManager.getSession(sessionKey);
+    if (!session) {
+      session = this.deps.sessionManager.createSession(sessionKey, 'default', job.name);
     }
+    return session.id;
   }
 
-  /**
-   * 解析目标聊天 ID
-   */
-  private async resolveChatId(channelId: string, to?: string): Promise<string> {
+  private async resolveChatId(_channelId: string, to?: string): Promise<string> {
     return to || 'default';
   }
 }

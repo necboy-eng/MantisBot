@@ -25,6 +25,7 @@ export type CronPayload =
       kind: "agentTurn";
       message: string;
       model?: string;
+      skills?: string[];      // 指定可用的 skill 名称列表，为空则禁用所有 skill
       deliver?: boolean;
       channel?: CronMessageChannel;
       to?: string;

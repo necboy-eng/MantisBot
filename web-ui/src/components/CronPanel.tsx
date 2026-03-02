@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { X, Play, Pause, Trash2, Plus, Clock, RefreshCw } from 'lucide-react';
+import { X, Play, Pause, Trash2, Plus, Clock, RefreshCw, CheckCircle, AlertCircle, Pencil } from 'lucide-react';
 import { authFetch } from '../utils/auth';
 
 interface CronJob {
@@ -18,6 +18,8 @@ interface CronJob {
     kind: 'systemEvent' | 'agentTurn';
     text?: string;
     message?: string;
+    model?: string;
+    skills?: string[];
   };
   delivery?: {
     mode: 'none' | 'announce';
@@ -37,27 +39,37 @@ interface CronPanelProps {
   onClose: () => void;
 }
 
+const defaultFormData = {
+  name: '',
+  description: '',
+  scheduleKind: 'cron' as 'at' | 'every' | 'cron',
+  scheduleAt: '',
+  everyAmount: 1,
+  everyUnit: 'hours' as 'minutes' | 'hours' | 'days',
+  cronExpr: '0 9 * * *',
+  cronTz: 'Asia/Shanghai',
+  payloadKind: 'agentTurn' as 'systemEvent' | 'agentTurn',
+  payloadText: '',
+  model: '',          // 空 = 使用系统默认模型
+  skills: [] as string[],
+  enabled: true
+};
+
 export function CronPanel({ isOpen, onClose }: CronPanelProps) {
   const [jobs, setJobs] = useState<CronJob[]>([]);
   const [loading, setLoading] = useState(false);
+  const [runningJobId, setRunningJobId] = useState<string | null>(null);
+  const [runFeedback, setRunFeedback] = useState<{ id: string; success: boolean } | null>(null);
   const [showForm, setShowForm] = useState(false);
-  const [formData, setFormData] = useState({
-    name: '',
-    description: '',
-    scheduleKind: 'cron' as 'at' | 'every' | 'cron',
-    scheduleAt: '',
-    everyAmount: 1,
-    everyUnit: 'hours' as 'minutes' | 'hours' | 'days',
-    cronExpr: '0 9 * * *',
-    cronTz: 'Asia/Shanghai',
-    payloadKind: 'agentTurn' as 'systemEvent' | 'agentTurn',
-    payloadText: '',
-    enabled: true
-  });
+  const [editingJob, setEditingJob] = useState<CronJob | null>(null);
+  const [formData, setFormData] = useState(defaultFormData);
+  const [availableModels, setAvailableModels] = useState<{ name: string }[]>([]);
+  const [availableSkills, setAvailableSkills] = useState<{ name: string; description: string }[]>([]);
 
   useEffect(() => {
     if (isOpen) {
       loadJobs();
+      loadModelsAndSkills();
     }
   }, [isOpen]);
 
@@ -74,15 +86,27 @@ export function CronPanel({ isOpen, onClose }: CronPanelProps) {
     }
   }
 
+  async function loadModelsAndSkills() {
+    try {
+      const [modelsRes, skillsRes] = await Promise.all([
+        authFetch('/api/models'),
+        authFetch('/api/skills'),
+      ]);
+      const modelsData = await modelsRes.json();
+      const skillsData = await skillsRes.json();
+      setAvailableModels(modelsData.models || []);
+      setAvailableSkills(skillsData.skills || []);
+    } catch (err) {
+      console.error('Failed to load models/skills:', err);
+    }
+  }
+
   async function toggleJob(job: CronJob) {
     try {
       await authFetch('/api/cron/update', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          id: job.id,
-          patch: { enabled: !job.enabled }
-        })
+        body: JSON.stringify({ id: job.id, patch: { enabled: !job.enabled } })
       });
       await loadJobs();
     } catch (err) {
@@ -91,21 +115,28 @@ export function CronPanel({ isOpen, onClose }: CronPanelProps) {
   }
 
   async function runJob(job: CronJob) {
+    setRunningJobId(job.id);
+    setRunFeedback(null);
     try {
-      await authFetch('/api/cron/run', {
+      const res = await authFetch('/api/cron/run', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id: job.id })
       });
+      setRunFeedback({ id: job.id, success: res.ok });
+      setTimeout(() => setRunFeedback(null), 2000);
       await loadJobs();
     } catch (err) {
       console.error('Failed to run job:', err);
+      setRunFeedback({ id: job.id, success: false });
+      setTimeout(() => setRunFeedback(null), 2000);
+    } finally {
+      setRunningJobId(null);
     }
   }
 
   async function removeJob(job: CronJob) {
     if (!confirm(`确定删除任务 "${job.name}"？`)) return;
-
     try {
       await authFetch('/api/cron/remove', {
         method: 'POST',
@@ -118,62 +149,101 @@ export function CronPanel({ isOpen, onClose }: CronPanelProps) {
     }
   }
 
-  async function createJob(e: React.FormEvent) {
+  function openEditForm(job: CronJob) {
+    setEditingJob(job);
+    let scheduleKind = job.schedule.kind;
+    let everyAmount = 1;
+    let everyUnit: 'minutes' | 'hours' | 'days' = 'hours';
+    if (scheduleKind === 'every' && job.schedule.everyMs) {
+      if (job.schedule.everyMs % 86400000 === 0) { everyAmount = job.schedule.everyMs / 86400000; everyUnit = 'days'; }
+      else if (job.schedule.everyMs % 3600000 === 0) { everyAmount = job.schedule.everyMs / 3600000; everyUnit = 'hours'; }
+      else { everyAmount = job.schedule.everyMs / 60000; everyUnit = 'minutes'; }
+    }
+    setFormData({
+      name: job.name,
+      description: job.description || '',
+      scheduleKind,
+      scheduleAt: job.schedule.at ? new Date(job.schedule.at).toISOString().slice(0, 16) : '',
+      everyAmount,
+      everyUnit,
+      cronExpr: job.schedule.expr || '0 9 * * *',
+      cronTz: job.schedule.tz || 'Asia/Shanghai',
+      payloadKind: job.payload.kind,
+      payloadText: job.payload.text || job.payload.message || '',
+      model: job.payload.model || '',
+      skills: job.payload.skills || [],
+      enabled: job.enabled
+    });
+    setShowForm(true);
+  }
+
+  function closeForm() {
+    setShowForm(false);
+    setEditingJob(null);
+    setFormData(defaultFormData);
+  }
+
+  function toggleSkill(skillName: string) {
+    setFormData(prev => ({
+      ...prev,
+      skills: prev.skills.includes(skillName)
+        ? prev.skills.filter(s => s !== skillName)
+        : [...prev.skills, skillName]
+    }));
+  }
+
+  async function submitJob(e: React.FormEvent) {
     e.preventDefault();
 
+    let schedule: any;
+    if (formData.scheduleKind === 'at') {
+      schedule = { kind: 'at', at: new Date(formData.scheduleAt).toISOString() };
+    } else if (formData.scheduleKind === 'every') {
+      const mult = formData.everyUnit === 'minutes' ? 60000 : formData.everyUnit === 'hours' ? 3600000 : 86400000;
+      schedule = { kind: 'every', everyMs: formData.everyAmount * mult };
+    } else {
+      schedule = { kind: 'cron', expr: formData.cronExpr, tz: formData.cronTz };
+    }
+
+    const payload = formData.payloadKind === 'systemEvent'
+      ? { kind: 'systemEvent', text: formData.payloadText }
+      : {
+          kind: 'agentTurn',
+          message: formData.payloadText,
+          ...(formData.model ? { model: formData.model } : {}),
+          skills: formData.skills,
+        };
+
     try {
-      // 构建 schedule
-      let schedule: any;
-      if (formData.scheduleKind === 'at') {
-        schedule = { kind: 'at', at: new Date(formData.scheduleAt).toISOString() };
-      } else if (formData.scheduleKind === 'every') {
-        const mult = formData.everyUnit === 'minutes' ? 60000 :
-                     formData.everyUnit === 'hours' ? 3600000 : 86400000;
-        schedule = { kind: 'every', everyMs: formData.everyAmount * mult };
+      if (editingJob) {
+        await authFetch('/api/cron/update', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            id: editingJob.id,
+            patch: { name: formData.name, description: formData.description, enabled: formData.enabled, schedule, payload }
+          })
+        });
       } else {
-        schedule = { kind: 'cron', expr: formData.cronExpr, tz: formData.cronTz };
+        await authFetch('/api/cron/add', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: formData.name,
+            description: formData.description,
+            enabled: formData.enabled,
+            schedule,
+            sessionTarget: 'isolated',
+            wakeMode: 'now',
+            payload,
+            delivery: { mode: 'announce', channel: 'last' }
+          })
+        });
       }
-
-      // 构建 payload
-      const payload = formData.payloadKind === 'systemEvent'
-        ? { kind: 'systemEvent', text: formData.payloadText }
-        : { kind: 'agentTurn', message: formData.payloadText };
-
-      await authFetch('/api/cron/add', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: formData.name,
-          description: formData.description,
-          enabled: formData.enabled,
-          schedule,
-          sessionTarget: 'isolated',
-          wakeMode: 'now',
-          payload,
-          delivery: {
-            mode: 'announce',
-            channel: 'last'
-          }
-        })
-      });
-
-      setShowForm(false);
-      setFormData({
-        name: '',
-        description: '',
-        scheduleKind: 'cron',
-        scheduleAt: '',
-        everyAmount: 1,
-        everyUnit: 'hours',
-        cronExpr: '0 9 * * *',
-        cronTz: 'Asia/Shanghai',
-        payloadKind: 'agentTurn',
-        payloadText: '',
-        enabled: true
-      });
+      closeForm();
       await loadJobs();
     } catch (err) {
-      console.error('Failed to create job:', err);
+      console.error('Failed to save job:', err);
     }
   }
 
@@ -182,9 +252,7 @@ export function CronPanel({ isOpen, onClose }: CronPanelProps) {
     return new Date(ms).toLocaleString('zh-CN');
   }
 
-  if (!isOpen) {
-    return null;
-  }
+  if (!isOpen) return null;
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
@@ -193,10 +261,7 @@ export function CronPanel({ isOpen, onClose }: CronPanelProps) {
         <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700">
           <h2 className="text-xl font-bold">定时任务管理</h2>
           <div className="flex items-center gap-2">
-            <button
-              onClick={loadJobs}
-              className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded"
-            >
+            <button onClick={loadJobs} className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded">
               <RefreshCw className="w-5 h-5" />
             </button>
             <button onClick={onClose} className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded">
@@ -213,13 +278,10 @@ export function CronPanel({ isOpen, onClose }: CronPanelProps) {
             <div className="space-y-4">
               {/* Job List */}
               {jobs.map(job => (
-                <div
-                  key={job.id}
-                  className="border border-gray-200 dark:border-gray-700 rounded-lg p-4"
-                >
+                <div key={job.id} className="border border-gray-200 dark:border-gray-700 rounded-lg p-4">
                   <div className="flex items-start justify-between">
                     <div className="flex-1">
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 flex-wrap">
                         <h3 className="font-medium">{job.name}</h3>
                         <span className={`text-xs px-2 py-1 rounded ${
                           job.enabled
@@ -237,11 +299,21 @@ export function CronPanel({ isOpen, onClose }: CronPanelProps) {
                             {job.state.lastStatus}
                           </span>
                         )}
+                        {/* 模型标签 */}
+                        {job.payload.kind === 'agentTurn' && job.payload.model && (
+                          <span className="text-xs px-2 py-1 rounded bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300">
+                            {job.payload.model}
+                          </span>
+                        )}
+                        {/* skills 标签 */}
+                        {job.payload.kind === 'agentTurn' && job.payload.skills && job.payload.skills.length > 0 && (
+                          <span className="text-xs px-2 py-1 rounded bg-yellow-100 text-yellow-700 dark:bg-yellow-900 dark:text-yellow-300">
+                            {job.payload.skills.length} 个 Skill
+                          </span>
+                        )}
                       </div>
                       {job.description && (
-                        <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-                          {job.description}
-                        </p>
+                        <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">{job.description}</p>
                       )}
                       <div className="flex items-center gap-4 mt-2 text-sm text-gray-500">
                         <div className="flex items-center gap-1">
@@ -253,10 +325,26 @@ export function CronPanel({ isOpen, onClose }: CronPanelProps) {
                     <div className="flex items-center gap-2">
                       <button
                         onClick={() => runJob(job)}
-                        className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded"
+                        disabled={runningJobId === job.id}
+                        className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded disabled:opacity-50"
                         title="立即运行"
                       >
-                        <Play className="w-4 h-4" />
+                        {runningJobId === job.id ? (
+                          <RefreshCw className="w-4 h-4 animate-spin" />
+                        ) : runFeedback?.id === job.id ? (
+                          runFeedback.success
+                            ? <CheckCircle className="w-4 h-4 text-green-500" />
+                            : <AlertCircle className="w-4 h-4 text-red-500" />
+                        ) : (
+                          <Play className="w-4 h-4 text-green-600" />
+                        )}
+                      </button>
+                      <button
+                        onClick={() => openEditForm(job)}
+                        className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded"
+                        title="编辑"
+                      >
+                        <Pencil className="w-4 h-4" />
                       </button>
                       <button
                         onClick={() => toggleJob(job)}
@@ -288,10 +376,10 @@ export function CronPanel({ isOpen, onClose }: CronPanelProps) {
                 </button>
               )}
 
-              {/* Create Form */}
+              {/* Create / Edit Form */}
               {showForm && (
-                <form onSubmit={createJob} className="border border-gray-200 dark:border-gray-700 rounded-lg p-4 space-y-4">
-                  <h3 className="font-medium">创建定时任务</h3>
+                <form onSubmit={submitJob} className="border border-gray-200 dark:border-gray-700 rounded-lg p-4 space-y-4">
+                  <h3 className="font-medium">{editingJob ? '编辑定时任务' : '创建定时任务'}</h3>
 
                   <div>
                     <label className="block text-sm font-medium mb-1">任务名称</label>
@@ -415,6 +503,55 @@ export function CronPanel({ isOpen, onClose }: CronPanelProps) {
                     />
                   </div>
 
+                  {/* 模型选择（仅 Agent 消息） */}
+                  {formData.payloadKind === 'agentTurn' && (
+                    <div>
+                      <label className="block text-sm font-medium mb-1">执行模型</label>
+                      <select
+                        value={formData.model}
+                        onChange={e => setFormData({ ...formData, model: e.target.value })}
+                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800"
+                      >
+                        <option value="">使用系统默认模型</option>
+                        {availableModels.map(m => (
+                          <option key={m.name} value={m.name}>{m.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+
+                  {/* Skills 多选（仅 Agent 消息） */}
+                  {formData.payloadKind === 'agentTurn' && availableSkills.length > 0 && (
+                    <div>
+                      <label className="block text-sm font-medium mb-2">
+                        启用 Skills
+                        <span className="ml-2 font-normal text-gray-500 dark:text-gray-400">
+                          （未选择则禁用所有 Skill）
+                        </span>
+                      </label>
+                      <div className="flex flex-wrap gap-2 max-h-40 overflow-y-auto p-2 border border-gray-200 dark:border-gray-700 rounded-lg">
+                        {availableSkills.map(skill => (
+                          <button
+                            key={skill.name}
+                            type="button"
+                            onClick={() => toggleSkill(skill.name)}
+                            title={skill.description}
+                            className={`px-2 py-1 rounded text-xs transition-colors ${
+                              formData.skills.includes(skill.name)
+                                ? 'bg-primary-600 text-white'
+                                : 'bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700'
+                            }`}
+                          >
+                            {skill.name}
+                          </button>
+                        ))}
+                      </div>
+                      {formData.skills.length > 0 && (
+                        <p className="mt-1 text-xs text-gray-500">已选 {formData.skills.length} 个</p>
+                      )}
+                    </div>
+                  )}
+
                   <div className="flex items-center gap-2">
                     <input
                       type="checkbox"
@@ -430,11 +567,11 @@ export function CronPanel({ isOpen, onClose }: CronPanelProps) {
                       type="submit"
                       className="flex-1 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700"
                     >
-                      创建任务
+                      {editingJob ? '保存修改' : '创建任务'}
                     </button>
                     <button
                       type="button"
-                      onClick={() => setShowForm(false)}
+                      onClick={closeForm}
                       className="px-4 py-2 border border-gray-300 dark:border-gray-700 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800"
                     >
                       取消
