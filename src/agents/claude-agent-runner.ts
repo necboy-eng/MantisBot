@@ -1216,13 +1216,18 @@ export class ClaudeAgentRunner extends EventEmitter {
         } else if (eventType === 'result') {
           // 检测执行错误（如 session 过期、resume 失败等）
           if (event.is_error === true) {
-            console.error('[ClaudeAgentRunner] Execution error:', event.subtype, '- clearing stale claudeSessionId');
-            // 清除失效的 session ID，下次消息将重新开始新会话
-            this.claudeSessionId = null;
-            const errMsg = event.subtype === 'error_during_execution'
-              ? '⚠️ 会话已过期，请重新发送刚才的消息（已自动重置，下次将正常响应）'
-              : `执行错误: ${event.subtype || 'unknown'}`;
-            yield { type: 'error', content: errMsg };
+            if (event.subtype === 'error_during_execution') {
+              // resume 失败（服务端 session 已过期）：静默清空 sessionId 并用本地历史重试
+              // 本地 conversationHistory 始终独立传入，降级后上下文依然连贯
+              // 重试时 claudeSessionId 为 null，不会再触发同一错误，最多重试一次
+              console.warn('[ClaudeAgentRunner] Session expired, silently retrying without resume...');
+              this.claudeSessionId = null;
+              yield* this.streamRun(userMessage, conversationHistory, abortSignal);
+              return;
+            }
+            // 其他错误类型仍然向上报告
+            console.error('[ClaudeAgentRunner] Execution error:', event.subtype);
+            yield { type: 'error', content: `执行错误: ${event.subtype || 'unknown'}` };
             return;
           }
           // 最终结果 - 文本已经在 assistant 事件中发送，这里不再重复发送
