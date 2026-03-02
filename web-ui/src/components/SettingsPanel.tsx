@@ -10,6 +10,7 @@ import { ChannelManagementSection } from './ChannelManagementSection';
 import { EmailConfigSection } from './EmailConfigSection';
 import { AuthSettingsSection } from './AuthSettingsSection';
 import { FirecrawlSettingsSection } from './FirecrawlSettingsSection';
+import { AgentTeamsSection } from './AgentTeamsSection';
 import { InstallSkillModal } from './InstallSkillModal';
 import { authFetch } from '../utils/auth';
 import { invalidateAllCache } from '../utils/configCache';
@@ -34,7 +35,7 @@ export function SettingsPanel({ isOpen, onClose }: SettingsPanelProps) {
   const [loading, setLoading] = useState(false);
   const [reloading, setReloading] = useState(false);
   const [downloadingSkills, setDownloadingSkills] = useState<Set<string>>(new Set());
-  const [activeTab, setActiveTab] = useState<'skills' | 'models' | 'profiles' | 'evolutions' | 'paths' | 'channels' | 'email' | 'auth' | 'firecrawl'>('models');
+  const [activeTab, setActiveTab] = useState<'skills' | 'models' | 'profiles' | 'evolutions' | 'paths' | 'channels' | 'email' | 'auth' | 'firecrawl' | 'teams'>('models');
   const [activeProfile, setActiveProfile] = useState('default');
   const [installModalOpen, setInstallModalOpen] = useState(false);
   const [reloadingConfig, setReloadingConfig] = useState(false);
@@ -296,6 +297,16 @@ export function SettingsPanel({ isOpen, onClose }: SettingsPanelProps) {
             >
               Firecrawl
             </button>
+            <button
+              onClick={() => setActiveTab('teams')}
+              className={`pb-3 text-sm font-medium border-b-2 transition-colors ${
+                activeTab === 'teams'
+                  ? 'text-primary-600 border-primary-600'
+                  : 'text-gray-500 border-transparent hover:text-gray-700'
+              }`}
+            >
+              Agent Teams
+            </button>
           </div>
         </div>
 
@@ -334,6 +345,8 @@ export function SettingsPanel({ isOpen, onClose }: SettingsPanelProps) {
           <AuthSettingsSection />
         ) : activeTab === 'firecrawl' ? (
           <FirecrawlSettingsSection />
+        ) : activeTab === 'teams' ? (
+          <AgentTeamsSection />
         ) : (
           <EvolutionSection />
         )}

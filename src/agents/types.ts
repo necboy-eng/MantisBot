@@ -19,7 +19,7 @@ export interface PermissionRequest {
  */
 export interface StreamChunk {
   // 消息类型
-  type: 'thinking' | 'text' | 'tool_use' | 'tool_result' | 'permission' | 'complete' | 'error' | 'system';
+  type: 'thinking' | 'text' | 'tool_use' | 'tool_result' | 'permission' | 'complete' | 'error' | 'system' | 'agent_invocation';
   // 文本内容
   content?: string;
   // 工具相关
@@ -34,6 +34,10 @@ export interface StreamChunk {
   attachments?: FileAttachment[];
   // 元数据
   messageId?: string;
+  // Agent 调用相关（type === 'agent_invocation'）
+  agentId?: string;       // 调用 tool_use_id
+  agentName?: string;     // subagent 的 key 名称
+  phase?: 'start' | 'end'; // 调用阶段
 }
 
 /**
@@ -64,6 +68,8 @@ export interface AgentRunnerOptions {
   cwd?: string;                        // 工作目录
   claudeSessionId?: string;            // 用于 resume 的会话 ID（仅 Claude SDK）
   abortSignal?: AbortSignal;           // 用于中断执行的信号
+  /** 激活的 Agent 团队配置（仅 Claude SDK 支持） */
+  activeTeam?: import('../config/schema.js').AgentTeam;
 }
 
 /**

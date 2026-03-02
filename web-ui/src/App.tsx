@@ -40,6 +40,15 @@ interface ToolStatus {
   timestamp?: number;
 }
 
+interface AgentInvocationStatus {
+  agentName: string;
+  agentId: string;
+  phase: 'running' | 'done';
+  startTime: number;
+  endTime?: number;
+  task?: string;  // 派遣任务描述
+}
+
 interface Message {
   id: string;
   role: 'user' | 'assistant';
@@ -49,6 +58,7 @@ interface Message {
   attachments?: FileAttachment[];
   toolStatus?: ToolStatus[];  // 新增：工具调用状态
   skillChain?: SkillCall[];   // 新增：技能调用链
+  agentInvocations?: AgentInvocationStatus[];  // Agent Teams 子调用
 }
 
 // 技能调用记录
@@ -70,8 +80,18 @@ interface Session {
   starred?: boolean;            // 星标置顶
 }
 
+interface AgentTeam {
+  id: string;
+  name: string;
+  description?: string;
+  triggerCommand?: string;
+  enabled: boolean;
+  _isPreset?: boolean;
+}
+
 interface Config {
-  models: { name: string; type: string; model: string }[];
+  models: { name: string; type: string; model: string; protocol?: string }[];
+  defaultModel?: string;
   officePreviewServer?: string;  // Office 文件预览服务器地址
 }
 
@@ -219,6 +239,8 @@ function App() {
   const [sessionLoading, setSessionLoading] = useState(false);  // 会话切换加载状态
   const [config, setConfig] = useState<Config | null>(null);
   const [selectedModel, setSelectedModel] = useState<string>('gpt-4');
+  const [selectedTeamId, setSelectedTeamId] = useState<string>('');  // '' 表示不使用团队
+  const [agentTeams, setAgentTeams] = useState<AgentTeam[]>([]);
   const [approvalMode, setApprovalMode] = useState<ApprovalMode>('dangerous');  // 审批模式，默认仅危险操作询问
   const [starredExpanded, setStarredExpanded] = useState(true);  // 星标分组是否展开
   const [canvasOpen, setCanvasOpen] = useState(() => window.innerWidth >= 768);
@@ -971,6 +993,7 @@ function App() {
     fetchConfig();
     fetchSessions();
     fetchNotifications();
+    fetchAgentTeams();
   }, [isAuthenticated]);
 
   async function fetchConfig() {
@@ -985,6 +1008,18 @@ function App() {
       }
     } catch (e) {
       console.error('Failed to fetch config:', e);
+    }
+  }
+
+  async function fetchAgentTeams() {
+    try {
+      const res = await authFetch('/api/agent-teams');
+      const data = await res.json();
+      // 只显示已启用且非预置的团队（预置团队需在 Settings 中保存才会出现）
+      const enabled = (data.teams || []).filter((t: AgentTeam) => t.enabled && !t._isPreset);
+      setAgentTeams(enabled);
+    } catch (e) {
+      // 安静失败，不影响主功能
     }
   }
 
@@ -1414,7 +1449,8 @@ function App() {
         body: JSON.stringify({
           sessionId: currentSession,
           message: fullMessage,
-          model: selectedModel
+          model: selectedModel,
+          ...(selectedTeamId ? { teamId: selectedTeamId } : {})
         }),
         signal: abortController.signal
       });
@@ -1664,6 +1700,35 @@ function App() {
                   isDangerous: parsed.isDangerous,
                   reason: parsed.reason,
                 });
+              }
+
+              // 处理 agent 事件（Agent Teams subagent 调用）
+              if (currentEvent === 'agent') {
+                console.log('[App] Agent event received:', { phase: parsed.phase, agentName: parsed.agentName, agentId: parsed.agentId, task: parsed.task, currentAssistantMsgId });
+                setStreamMessages(prev => prev.map(msg => {
+                  if (msg.id !== currentAssistantMsgId) return msg;
+                  const existing = msg.agentInvocations || [];
+                  if (parsed.phase === 'start') {
+                    const updated = [...existing, {
+                      agentName: parsed.agentName,
+                      agentId: parsed.agentId,
+                      phase: 'running' as const,
+                      startTime: Date.now(),
+                      task: parsed.task,
+                    }];
+                    console.log('[App] Agent invocations after start:', updated);
+                    return { ...msg, agentInvocations: updated };
+                  } else {
+                    return {
+                      ...msg,
+                      agentInvocations: existing.map(a =>
+                        a.agentId === parsed.agentId
+                          ? { ...a, phase: 'done' as const, endTime: Date.now() }
+                          : a
+                      ),
+                    };
+                  }
+                }));
               }
 
               // 处理 error 事件（错误）
@@ -2363,6 +2428,52 @@ function App() {
               <span className="text-blue-700 dark:text-blue-300 text-sm font-medium">
                 使用技能: <strong className="text-blue-800 dark:text-blue-200">{activeSkill.name}</strong>
               </span>
+            </div>
+          )}
+
+          {/* Agent Teams Selector */}
+          {agentTeams.length > 0 && (
+            <div className="mb-2 flex items-center gap-2 flex-wrap">
+              <span className="text-xs text-gray-500 dark:text-gray-400 shrink-0">Agent Team:</span>
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <button
+                  type="button"
+                  onClick={() => setSelectedTeamId('')}
+                  className={`px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${
+                    selectedTeamId === ''
+                      ? 'bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200'
+                      : 'bg-transparent text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800'
+                  }`}
+                >
+                  默认
+                </button>
+                {agentTeams.map(team => (
+                  <button
+                    key={team.id}
+                    type="button"
+                    onClick={() => setSelectedTeamId(team.id === selectedTeamId ? '' : team.id)}
+                    title={team.description || team.name}
+                    className={`px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${
+                      selectedTeamId === team.id
+                        ? 'bg-primary-100 dark:bg-primary-900/40 text-primary-700 dark:text-primary-300 ring-1 ring-primary-400'
+                        : 'bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700'
+                    }`}
+                  >
+                    {team.triggerCommand ? `/${team.triggerCommand} ` : ''}
+                    {team.name}
+                  </button>
+                ))}
+              </div>
+              {/* 非 Anthropic 模型警告 */}
+              {selectedTeamId && (() => {
+                const model = config?.models?.find(m => m.name === selectedModel);
+                const isAnthropic = model?.protocol === 'anthropic';
+                return !isAnthropic ? (
+                  <span className="text-xs text-amber-600 dark:text-amber-400 flex items-center gap-1">
+                    ⚠ Agent Teams 仅支持 Anthropic (Claude) 模型
+                  </span>
+                ) : null;
+              })()}
             </div>
           )}
 

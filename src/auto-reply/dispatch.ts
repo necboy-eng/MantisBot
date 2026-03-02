@@ -7,6 +7,8 @@ import { SessionManager } from '../session/manager.js';
 import { MemoryManager } from '../memory/manager.js';
 import { truncateHistory } from '../utils/token-counter.js';
 import { getConfig } from '../config/loader.js';
+import { detectTeamFromMessage, findTeamByCommand } from '../agents/agent-teams.js';
+import type { AgentTeam } from '../config/schema.js';
 
 export interface DispatchResult {
   response: string;
@@ -29,11 +31,56 @@ export class MessageDispatcher {
     this.memoryManager = memoryManager;
   }
 
+  /**
+   * 解析消息中的团队触发信息，返回 { team, cleanedContent }
+   *
+   * 三种触发方式（按优先级）：
+   * 1. UI 显式指定 teamId（message.teamId 字段）
+   * 2. /command 触发（消息以 "/xxx " 或 "/xxx\n" 开头）
+   * 3. AI 自动关键词检测
+   */
+  private resolveTeam(message: ChannelMessage): { team: AgentTeam | null; content: string } {
+    const config = getConfig();
+    const teams: AgentTeam[] = config.agentTeams || [];
+    let content = message.content;
+
+    // 1. UI 显式指定 teamId
+    const explicitTeamId = (message as any).teamId as string | undefined;
+    if (explicitTeamId) {
+      const team = teams.find(t => t.enabled && t.id === explicitTeamId) ?? null;
+      if (team) {
+        console.log(`[Dispatch] Using explicitly selected team: ${team.name}`);
+        return { team, content };
+      }
+    }
+
+    // 2. /command 触发：以 "/xxx" 开头（后跟空格、换行或直接结束）
+    const cmdMatch = content.match(/^\/([a-zA-Z0-9_-]+)(?:\s+(.*))?$/s);
+    if (cmdMatch) {
+      const command = cmdMatch[1];
+      const team = findTeamByCommand(command, teams);
+      if (team) {
+        content = cmdMatch[2]?.trim() || content;
+        console.log(`[Dispatch] Team triggered by command /${command}: ${team.name}`);
+        return { team, content };
+      }
+    }
+
+    // 3. AI 自动关键词检测
+    const detectedTeam = detectTeamFromMessage(content, teams);
+    if (detectedTeam) {
+      console.log(`[Dispatch] Team auto-detected from keywords: ${detectedTeam.name}`);
+      return { team: detectedTeam, content };
+    }
+
+    return { team: null, content };
+  }
+
   async dispatch(
     message: ChannelMessage,
     context: ChannelContext
   ): Promise<DispatchResult> {
-    const { content, userId, chatId } = message;
+    const { userId, chatId } = message;
     const sessionId = chatId;
 
     try {
@@ -54,10 +101,8 @@ export class MessageDispatcher {
       }));
 
       // 截断历史，确保传入 LLM 的对话不超过预算
-      // 预留约 30% 的空间给 system prompt、记忆上下文和本次用户消息
       const historyBudget = Math.floor(maxInputChars * 0.7);
       const truncated = truncateHistory(rawHistory, historyBudget);
-      // 将 role 类型断言回 LLMMessage 兼容类型
       const history = truncated as Array<{ role: 'user' | 'assistant' | 'system' | 'tool'; content: string }>;
 
       if (rawHistory.length !== truncated.length) {
@@ -67,12 +112,29 @@ export class MessageDispatcher {
         );
       }
 
+      // 解析团队触发（三种方式）
+      const { team: activeTeam, content } = this.resolveTeam(message);
+
+      // 如果激活了团队，将团队信息注入 Runner options（通过 setOptions 或直接在 run 时传）
+      if (activeTeam) {
+        // 将 activeTeam 注入 runner（UnifiedAgentRunner 支持动态 options）
+        const runner = this.agentRunner as any;
+        if (typeof runner.setActiveTeam === 'function') {
+          runner.setActiveTeam(activeTeam);
+        }
+        console.log(`[Dispatch] Active team: ${activeTeam.name} (${Object.keys(activeTeam.agents).length} subagents)`);
+      } else {
+        const runner = this.agentRunner as any;
+        if (typeof runner.setActiveTeam === 'function') {
+          runner.setActiveTeam(null);
+        }
+      }
+
       // Search relevant memories
-      // 跨 session 搜索，支持长期记忆
       console.log('[Dispatch] Searching memories for:', content.substring(0, 50));
       const memories = await this.memoryManager.searchHybrid('default', content, {
         limit: 7,
-        sessionKey: undefined  // 不限制 session，支持跨 session 记忆
+        sessionKey: undefined
       });
       console.log(`[Dispatch] Found ${memories.length} memories:`,
         memories.map(m => m.content.substring(0, 30)));
@@ -103,7 +165,7 @@ ${content}
       // Add messages to session
       this.sessionManager.addMessage(sessionId, {
         role: 'user',
-        content,
+        content: message.content,
       });
       this.sessionManager.addMessage(sessionId, {
         role: 'assistant',
@@ -113,7 +175,7 @@ ${content}
       return {
         response: result.response,
         success: result.success,
-        files: result.attachments,  // 传递 Agent 收集的附件
+        files: result.attachments,
       };
     } catch (error) {
       console.error('[Dispatch] Error:', error);

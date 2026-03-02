@@ -118,6 +118,19 @@ export class UnifiedAgentRunner extends EventEmitter implements IAgentRunner {
   }
 
   /**
+   * 动态设置激活的 Agent 团队（仅 ClaudeAgentRunner 支持）
+   * 由 MessageDispatcher 在每次消息分发时调用
+   */
+  setActiveTeam(team: import('../config/schema.js').AgentTeam | null): void {
+    if (this.claudeRunner) {
+      (this.claudeRunner as any).options.activeTeam = team ?? undefined;
+      console.log(`[UnifiedRunner] Active team set to: ${team?.name ?? 'none'}`);
+    } else {
+      console.log('[UnifiedRunner] setActiveTeam ignored: not using ClaudeAgentRunner');
+    }
+  }
+
+  /**
    * 流式运行
    */
   async *streamRun(

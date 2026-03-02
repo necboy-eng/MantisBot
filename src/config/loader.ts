@@ -108,6 +108,7 @@ export function getDefaultConfig(): Config {
     ],
     disabledSkills: [],
     activeProfile: 'default',
+    agentTeams: [],
   } as Config;
 }
 

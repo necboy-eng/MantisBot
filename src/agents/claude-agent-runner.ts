@@ -11,6 +11,7 @@ import { getConfig } from '../config/loader.js';
 import { applyIsolatedEnv, buildIsolatedEnv } from '../env-isolation.js';
 import { getFileStorage } from '../files/storage.js';
 import { workDirManager } from '../workdir/manager.js';
+import { buildSdkAgents } from './agent-teams.js';
 import { z } from 'zod';
 
 // 审批模式类型
@@ -27,11 +28,13 @@ export interface ClaudeAgentRunnerOptions {
   pluginSkillsPrompt?: string;  // Plugin skills 提示词（来自 plugins 目录）
   cwd?: string;  // 工作目录
   claudeSessionId?: string;  // 用于 resume 的会话 ID
+  /** 激活的 Agent 团队配置（仅 Claude SDK 支持） */
+  activeTeam?: import('../config/schema.js').AgentTeam;
 }
 
 export interface StreamChunk {
   // 消息类型
-  type: 'thinking' | 'text' | 'tool_use' | 'tool_result' | 'permission' | 'complete' | 'error' | 'system';
+  type: 'thinking' | 'text' | 'tool_use' | 'tool_result' | 'permission' | 'complete' | 'error' | 'system' | 'agent_invocation';
   // 文本内容
   content?: string;
   // 工具相关
@@ -46,6 +49,10 @@ export interface StreamChunk {
   attachments?: FileAttachment[];
   // 元数据
   messageId?: string;
+  // Agent 调用相关（type === 'agent_invocation'）
+  agentId?: string;
+  agentName?: string;
+  phase?: 'start' | 'end';
 }
 
 export interface PermissionRequest {
@@ -128,6 +135,22 @@ const MCP_ONLY_TOOLS = new Set([
 
 // 工具结果截断配置
 const MAX_TOOL_RESULT_CHARS = 6000;
+
+/**
+ * 将 subagent 模型别名解析为实际可用的模型名称
+ * - 'inherit' 或 undefined → 使用父模型
+ * - 'opus' / 'sonnet' / 'haiku' → Claude 原生模型 ID
+ * - 其他 → 直接透传（可能是完整模型 ID）
+ */
+function resolveSubagentModel(agentModel: string | undefined, parentModel: string): string {
+  if (!agentModel || agentModel === 'inherit') return parentModel;
+  const claudeAliases: Record<string, string> = {
+    opus: 'claude-opus-4-6',
+    sonnet: 'claude-sonnet-4-6',
+    haiku: 'claude-haiku-4-5-20251001',
+  };
+  return claudeAliases[agentModel] ?? agentModel;
+}
 const TRUNCATION_SUFFIX = '\n\n[Result truncated - original content too large]';
 
 /**
@@ -230,7 +253,8 @@ export class ClaudeAgentRunner extends EventEmitter {
     model: string;
     systemPrompt: string;
     maxIterations: number;
-    approvalMode: ApprovalMode;  // 审批模式
+    approvalMode: ApprovalMode;
+    activeTeam?: import('../config/schema.js').AgentTeam;
   };
 
   // Agent SDK 会话 ID（用于 resume 继续会话）
@@ -284,6 +308,7 @@ export class ClaudeAgentRunner extends EventEmitter {
       systemPrompt: options.systemPrompt || '',
       maxIterations: options.maxIterations || 0,  // 0 = 无限制
       approvalMode,
+      activeTeam: options.activeTeam,
     };
     console.log('[ClaudeAgentRunner] Initialized with approvalMode:', approvalMode);
   }
@@ -553,6 +578,17 @@ export class ClaudeAgentRunner extends EventEmitter {
     if (!systemPrompt) {
       systemPrompt = 'You are a helpful AI assistant.';
     }
+
+    // Agent Team 激活时：将协调者角色注入到系统提示词最顶部，优先级高于一切
+    // 这确保模型首先建立"我是协调者"的身份，而不是被后续的 skills 指令覆盖
+    if (this.options.activeTeam?.orchestrator?.systemPrompt) {
+      const agentList = Object.entries(this.options.activeTeam.agents)
+        .map(([id, def]) => `- **${id}**: ${def.description}`)
+        .join('\n');
+      console.log('[ClaudeAgentRunner] Prepending Agent Team orchestrator prompt for team:', this.options.activeTeam.name);
+      systemPrompt = `## 你当前的角色：${this.options.activeTeam.name} 协调者\n\n${this.options.activeTeam.orchestrator.systemPrompt}\n\n可调用的专业 Agent（以工具调用方式派遣）：\n${agentList}\n\n**重要**：你不应直接执行任务（不要自己搜索、写报告、分析数据），你的职责是将任务分解后派遣给上述专业 Agent 完成。\n\n---\n\n${systemPrompt}`;
+    }
+
     // 将当前工作目录注入系统提示词，确保 Claude 始终感知到正确路径
     systemPrompt = `${systemPrompt}\n\n## 当前工作目录\n${currentCwd}`;
 
@@ -560,8 +596,8 @@ export class ClaudeAgentRunner extends EventEmitter {
     systemPrompt = `${systemPrompt}\n\n## 记忆工具\n你有一个 \`remember\` 工具，仅在学到对未来对话有价值的信息时调用：\n- 用户偏好（编码风格、语言偏好、沟通方式）\n- 项目关键事实（技术栈、架构决策、环境信息）\n- 重要决策（用户做出的选择，如"暂不引入 Redis"）\n- 个人上下文（姓名、时区、角色）\n\n不要调用 remember 记录：普通问答、解释说明、调试步骤、或仅与当前任务相关的临时信息。`;
 
     // 加载 Skills 提示词（如果提供了 skillsLoader）
-    // 使用 enabledSkills 配置，只启用配置中的 skills
-    if (this.skillsLoader) {
+    // Agent Team 激活时跳过：协调者不直接执行技能，skills 由各子 agent 自身携带
+    if (this.skillsLoader && !this.options.activeTeam) {
       const config = getConfig();
       const enabledSkills = config.enabledSkills || [];
       const skillsPrompt = this.skillsLoader.getPromptContent(enabledSkills);
@@ -569,10 +605,12 @@ export class ClaudeAgentRunner extends EventEmitter {
         console.log('[ClaudeAgentRunner] Loaded skills, adding to system prompt');
         systemPrompt = `${systemPrompt}\n\n${skillsPrompt}`;
       }
+    } else if (this.options.activeTeam) {
+      console.log('[ClaudeAgentRunner] Skipping skills injection (Agent Team active, orchestrator delegates to subagents)');
     }
 
-    // 添加 Plugin skills 提示词
-    if (this.pluginSkillsPrompt) {
+    // 添加 Plugin skills 提示词（同样在 Agent Team 激活时跳过）
+    if (this.pluginSkillsPrompt && !this.options.activeTeam) {
       console.log('[ClaudeAgentRunner] Loaded plugin skills, adding to system prompt');
       systemPrompt = `${systemPrompt}\n\n${this.pluginSkillsPrompt}`;
     }
@@ -638,11 +676,74 @@ export class ClaudeAgentRunner extends EventEmitter {
       );
     });
 
+    // ── Agent Team 工具包装器 ───────────────────────────────────────────────
+    // 当激活 Agent Team 时，为每个 subagent 创建一个真实的 MCP 工具。
+    // 协调者通过调用这些工具来派遣 subagent，避免依赖 SDK 原生 agents 特性，
+    // 使 GLM-5 / MiniMax 等 Anthropic-compatible 模型也能正确触发 subagent。
+    const agentMcpTools: ReturnType<typeof createTool>[] = [];
+    const agentToolNames: string[] = [];
+
+    if (this.options.activeTeam) {
+      const team = this.options.activeTeam;
+      console.log('[ClaudeAgentRunner] Building subagent MCP tools for team:', team.name);
+
+      for (const [agentId, agentDef] of Object.entries(team.agents)) {
+        agentToolNames.push(agentId);
+        const subAgentModel = resolveSubagentModel(agentDef.model, this.options.model);
+
+        agentMcpTools.push(
+          createTool(
+            agentId,
+            agentDef.description,
+            { task: z.string().describe('The specific task for this agent to perform') } as any,
+            async (args: Record<string, unknown>) => {
+              const task = String(args.task || '');
+              console.log(`[ClaudeAgentRunner] ▶ Subagent "${agentId}" started, task:`, task.slice(0, 200));
+
+              // 为 subagent 创建独立 runner（不传 activeTeam 防止递归）
+              const subRunner = new ClaudeAgentRunner(this.toolRegistry, {
+                model: subAgentModel,
+                systemPrompt: agentDef.systemPrompt || agentDef.description,
+                maxIterations: agentDef.maxTurns || 20,
+                approvalMode: 'auto',
+              });
+
+              let outputText = '';
+              try {
+                for await (const chunk of subRunner.streamRun(task)) {
+                  if (chunk.type === 'text' && chunk.content) {
+                    outputText += chunk.content;
+                  } else if (chunk.type === 'complete' && chunk.attachments?.length) {
+                    // 将 subagent 产生的附件冒泡至父 runner
+                    collectAttachments({ attachments: chunk.attachments }, attachments);
+                  }
+                }
+              } catch (err) {
+                console.error(`[ClaudeAgentRunner] Subagent "${agentId}" error:`, err);
+                return {
+                  content: [{ type: 'text' as const, text: `Error in ${agentId}: ${err}` }],
+                  isError: true,
+                };
+              }
+
+              console.log(`[ClaudeAgentRunner] ✓ Subagent "${agentId}" completed, output length:`, outputText.length);
+              return {
+                content: [{ type: 'text' as const, text: outputText || `(${agentId} 已完成，无文本输出)` }],
+              };
+            }
+          )
+        );
+      }
+    }
+
+    // 合并所有 MCP 工具（内置工具 + subagent 工具）
+    const allMcpTools = [...mcpTools, ...agentMcpTools];
+
     // 构建 MCP 服务器（如果没有特有工具则不创建）
-    const mcpServer = mcpTools.length > 0
+    const mcpServer = allMcpTools.length > 0
       ? createSdkMcpServer({
           name: 'mantis-tools',
-          tools: mcpTools,
+          tools: allMcpTools,
         })
       : null;
 
@@ -668,7 +769,9 @@ export class ClaudeAgentRunner extends EventEmitter {
         ...(useFirecrawl ? [] : ['WebSearch', 'WebFetch']),
         'AskUserQuestion',
         // MCP 工具
-        ...mcpOnlyToolList.map((t: ToolInfo) => t.name)
+        ...mcpOnlyToolList.map((t: ToolInfo) => t.name),
+        // Subagent 工具（Agent Team 激活时动态添加，名称 = agentId）
+        ...agentToolNames,
       ],
       // 权限模式：使用 default 以确保 canUseTool 回调被调用
       // SDK 默认可能使用 bypassPermissions，导致 canUseTool 不被调用
@@ -693,6 +796,14 @@ export class ClaudeAgentRunner extends EventEmitter {
           args: ['--timeout', '60'],  // ripgrep 搜索超时 60 秒
         },
       },
+      // Agent Teams：如果有激活的团队，传入 subagent 定义（仅 Claude SDK 支持）
+      ...(this.options.activeTeam
+        ? {
+            agents: buildSdkAgents(this.options.activeTeam),
+            // 使用团队 orchestrator 的 maxTurns（如未设置则回退到默认值）
+            maxTurns: this.options.activeTeam.orchestrator.maxTurns,
+          }
+        : {}),
       // 不加载任何文件系统配置（完全隔离模式）
       // - 不读取 ~/.claude/settings.json（不加载全局用户 Skills/插件配置）
       // - 不读取 .claude/settings.json（不加载项目级 SDK 设置）
@@ -838,6 +949,27 @@ export class ClaudeAgentRunner extends EventEmitter {
       // 处理事件流
       console.log('[ClaudeAgentRunner] Starting to iterate events...');
       let eventCount = 0;
+      // Agent Teams 调用追踪：tool_use_id → agent名称
+      const agentCallMap = new Map<string, string>();
+      const agentNames = this.options.activeTeam ? Object.keys(this.options.activeTeam.agents) : [];
+
+      // 工具名称规范化：Claude Code SDK 中 MCP 工具名带有 mcp__<server>__<name> 前缀
+      // 需要提取末尾的 <name> 部分与 agentNames 进行比对
+      const getMcpBaseName = (toolName: string): string => {
+        // 匹配 mcp__<server>__<basename> 格式，提取最后一段
+        if (toolName.startsWith('mcp__') && toolName.includes('__', 5)) {
+          const lastDoubleUnderscore = toolName.lastIndexOf('__');
+          return toolName.slice(lastDoubleUnderscore + 2);
+        }
+        return toolName;
+      };
+      // 检查工具名（可能带 MCP 前缀）是否对应某个 agent
+      const resolveAgentName = (toolName: string): string | null => {
+        const baseName = getMcpBaseName(toolName);
+        if (agentNames.includes(baseName)) return baseName;
+        if (agentNames.includes(toolName)) return toolName;
+        return null;
+      };
       for await (const event of result as AsyncIterable<any>) {
         // 检查中断信号
         if (abortSignal?.aborted) {
@@ -902,12 +1034,33 @@ export class ClaudeAgentRunner extends EventEmitter {
               if (toolId) {
                 toolIdToInfo.set(toolId, { name: toolName, args: toolInput });  // 建立映射
               }
-              yield {
-                type: 'tool_use',
-                tool: toolName,
-                toolId: toolId,
-                args: toolInput,
-              };
+              // 检测是否是 Agent 团队调用（orchestrator 委派 subagent）
+              // 注意：MCP 工具名带有 mcp__<server>__<name> 前缀，需用 resolveAgentName 规范化
+              const resolvedAgent1 = toolId ? resolveAgentName(toolName) : null;
+              if (toolId && resolvedAgent1) {
+                agentCallMap.set(toolId, resolvedAgent1);
+                // 提取 task 字段作为任务描述（MCP 工具包装器统一使用 { task } 参数）
+                const taskDesc = typeof (toolInput as any)?.task === 'string' ? (toolInput as any).task : undefined;
+                console.log(`[ClaudeAgentRunner] ✦ Agent invocation detected (message_create): ${resolvedAgent1} (raw: ${toolName}), task: ${taskDesc?.slice(0, 100)}`);
+                yield { type: 'agent_invocation', agentId: toolId, agentName: resolvedAgent1, phase: 'start', content: taskDesc };
+              } else if (toolName === 'Bash' && agentNames.length > 0 && typeof (toolInput as any)?.description === 'string') {
+                // 检测通过 Bash description 标记的 agent 派遣（GLM 等非原生 subagent 模式）
+                const desc: string = (toolInput as any).description;
+                const matchedAgent = agentNames.find(n => desc.includes(n));
+                if (matchedAgent && toolId) {
+                  agentCallMap.set(toolId, matchedAgent);
+                  yield { type: 'agent_invocation', agentId: toolId, agentName: matchedAgent, phase: 'start', content: desc };
+                } else {
+                  yield { type: 'tool_use', tool: toolName, toolId: toolId, args: toolInput };
+                }
+              } else {
+                yield {
+                  type: 'tool_use',
+                  tool: toolName,
+                  toolId: toolId,
+                  args: toolInput,
+                };
+              }
             }
           }
         } else if (eventType === 'content_block_start') {
@@ -920,6 +1073,14 @@ export class ClaudeAgentRunner extends EventEmitter {
             console.log('[ClaudeAgentRunner] Tool block start:', toolName, 'id:', toolId);
             if (toolId && toolName) {
               toolIdToInfo.set(toolId, { name: toolName, args: toolInput });
+              // 检测是否是 Agent 团队调用（content_block_start 中检测，作为备用路径）
+              const resolvedAgent2 = resolveAgentName(toolName);
+              if (resolvedAgent2 && !agentCallMap.has(toolId)) {
+                agentCallMap.set(toolId, resolvedAgent2);
+                const taskDesc = typeof (toolInput as any)?.task === 'string' ? (toolInput as any).task : undefined;
+                console.log(`[ClaudeAgentRunner] ✦ Agent invocation detected (content_block_start): ${resolvedAgent2} (raw: ${toolName})`);
+                yield { type: 'agent_invocation', agentId: toolId, agentName: resolvedAgent2, phase: 'start', content: taskDesc };
+              }
             }
           }
         } else if (eventType === 'content_block_delta') {
@@ -952,12 +1113,30 @@ export class ClaudeAgentRunner extends EventEmitter {
             toolIdToInfo.set(toolId, { name: toolName, args: toolInput });  // 建立映射
           }
 
-          yield {
-            type: 'tool_use',
-            tool: toolName,
-            toolId: toolId,
-            args: toolInput,
-          };
+          // 检测是否是 Agent 团队调用（tool_use 事件中检测，作为备用路径）
+          const resolvedAgent3 = toolId && toolName ? resolveAgentName(toolName) : null;
+          if (toolId && toolName && resolvedAgent3 && !agentCallMap.has(toolId)) {
+            agentCallMap.set(toolId, resolvedAgent3);
+            const taskDesc = typeof (toolInput as any)?.task === 'string' ? (toolInput as any).task : undefined;
+            console.log(`[ClaudeAgentRunner] ✦ Agent invocation detected (tool_use): ${resolvedAgent3} (raw: ${toolName}), task: ${taskDesc?.slice(0, 100)}`);
+            yield { type: 'agent_invocation', agentId: toolId, agentName: resolvedAgent3, phase: 'start', content: taskDesc };
+          } else if (toolName === 'Bash' && agentNames.length > 0 && typeof (toolInput as any)?.description === 'string' && toolId && !agentCallMap.has(toolId)) {
+            const desc: string = (toolInput as any).description;
+            const matchedAgent = agentNames.find(n => desc.includes(n));
+            if (matchedAgent) {
+              agentCallMap.set(toolId, matchedAgent);
+              yield { type: 'agent_invocation', agentId: toolId, agentName: matchedAgent, phase: 'start', content: desc };
+            } else {
+              yield { type: 'tool_use', tool: toolName, toolId: toolId, args: toolInput };
+            }
+          } else {
+            yield {
+              type: 'tool_use',
+              tool: toolName,
+              toolId: toolId,
+              args: toolInput,
+            };
+          }
 
           // 执行工具（这里会在 canUseTool 之后自动执行）
           // 注意：实际执行由 SDK 内部处理
@@ -975,13 +1154,20 @@ export class ClaudeAgentRunner extends EventEmitter {
               const toolName = toolInfo?.name || currentToolName || 'tool';
               const toolArgs = toolInfo?.args || currentToolArgs;
               console.log('[ClaudeAgentRunner] Tool result for', toolName, '(id:', toolUseId, ') args:', JSON.stringify(toolArgs)?.slice(0, 200), 'result:', resultContent?.slice?.(0, 100) || resultContent);
-              yield {
-                type: 'tool_result',
-                tool: toolName,
-                toolId: toolUseId,
-                args: toolArgs,  // 包含参数，前端可以从中提取命令
-                result: resultContent,
-              };
+              // 检测是否是 Agent 调用的结果（subagent 完成）
+              if (toolUseId && agentCallMap.has(toolUseId)) {
+                const agentName = agentCallMap.get(toolUseId)!;
+                agentCallMap.delete(toolUseId);
+                yield { type: 'agent_invocation', agentId: toolUseId, agentName, phase: 'end' };
+              } else {
+                yield {
+                  type: 'tool_result',
+                  tool: toolName,
+                  toolId: toolUseId,
+                  args: toolArgs,  // 包含参数，前端可以从中提取命令
+                  result: resultContent,
+                };
+              }
               // 清理映射
               if (toolUseId) {
                 toolIdToInfo.delete(toolUseId);
@@ -1004,13 +1190,20 @@ export class ClaudeAgentRunner extends EventEmitter {
           const toolArgs = toolInfo?.args || currentToolArgs;
           console.log(`[ClaudeAgentRunner] Tool result for`, toolName, '(id:', toolUseId, ') args:', JSON.stringify(toolArgs)?.slice(0, 200), 'result:', toolResult?.slice?.(0, 100) || toolResult);
 
-          yield {
-            type: 'tool_result',
-            tool: toolName,
-            toolId: toolUseId,
-            args: toolArgs,  // 包含参数，前端可以从中提取命令
-            result: toolResult,
-          };
+          // 检测是否是 Agent 调用的结果（subagent 完成）
+          if (toolUseId && agentCallMap.has(toolUseId)) {
+            const agentName = agentCallMap.get(toolUseId)!;
+            agentCallMap.delete(toolUseId);
+            yield { type: 'agent_invocation', agentId: toolUseId, agentName, phase: 'end' };
+          } else {
+            yield {
+              type: 'tool_result',
+              tool: toolName,
+              toolId: toolUseId,
+              args: toolArgs,  // 包含参数，前端可以从中提取命令
+              result: toolResult,
+            };
+          }
           // 清理映射
           if (toolUseId) {
             toolIdToInfo.delete(toolUseId);
@@ -1021,6 +1214,22 @@ export class ClaudeAgentRunner extends EventEmitter {
           // 继续迭代
           iterations++;
         } else if (eventType === 'result') {
+          // 检测执行错误（如 session 过期、resume 失败等）
+          if (event.is_error === true) {
+            if (event.subtype === 'error_during_execution') {
+              // resume 失败（服务端 session 已过期）：静默清空 sessionId 并用本地历史重试
+              // 本地 conversationHistory 始终独立传入，降级后上下文依然连贯
+              // 重试时 claudeSessionId 为 null，不会再触发同一错误，最多重试一次
+              console.warn('[ClaudeAgentRunner] Session expired, silently retrying without resume...');
+              this.claudeSessionId = null;
+              yield* this.streamRun(userMessage, conversationHistory, abortSignal);
+              return;
+            }
+            // 其他错误类型仍然向上报告
+            console.error('[ClaudeAgentRunner] Execution error:', event.subtype);
+            yield { type: 'error', content: `执行错误: ${event.subtype || 'unknown'}` };
+            return;
+          }
           // 最终结果 - 文本已经在 assistant 事件中发送，这里不再重复发送
           // 只发送 complete 事件表示结束
           console.log('[ClaudeAgentRunner] Result event, attachments count:', attachments.length);

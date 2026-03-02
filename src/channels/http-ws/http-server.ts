@@ -13,7 +13,9 @@ import { v4 as uuidv4 } from 'uuid';
 import type { SessionManager } from '../../session/manager.js';
 import type { ToolRegistry } from '../../agents/tools/registry.js';
 import { getConfig, loadConfig, saveConfig } from '../../config/loader.js';
-import type { Config, EmailAccount, EmailConfig } from '../../config/schema.js';
+import type { Config, EmailAccount, EmailConfig, AgentTeam } from '../../config/schema.js';
+import { AgentTeamSchema } from '../../config/schema.js';
+import { PRESET_TEAMS } from '../../agents/agent-teams.js';
 import { createAuthMiddleware, computeToken, hashPassword, verifyPassword } from './auth-middleware.js';
 import { EMAIL_PROVIDERS } from '../../config/schema.js';
 import type { Message } from '../../types.js';
@@ -429,7 +431,7 @@ export async function createHTTPServer(options: HTTPServerOptions) {
   // SSE Stream Chat endpoint
   app.post('/api/chat/stream', async (req, res): Promise<void> => {
     try {
-      const { sessionId, message, model } = req.body;
+      const { sessionId, message, model, teamId } = req.body;
 
       if (!message) {
         res.status(400).json({ error: 'Message is required' });
@@ -617,6 +619,20 @@ export async function createHTTPServer(options: HTTPServerOptions) {
         }
       }
 
+      // Agent Teams：根据 teamId 设置活跃团队
+      if (agentRunner instanceof UnifiedAgentRunner && typeof agentRunner.setActiveTeam === 'function') {
+        if (teamId) {
+          const teams: AgentTeam[] = config.agentTeams || [];
+          const activeTeam = teams.find(t => t.id === teamId && t.enabled) || null;
+          agentRunner.setActiveTeam(activeTeam);
+          if (activeTeam) {
+            console.log(`[HTTPServer] Active team set: ${activeTeam.name}`);
+          }
+        } else {
+          agentRunner.setActiveTeam(null);
+        }
+      }
+
       // Stream process
       for await (const chunk of agentRunner.streamRun(contextualMessage, history)) {
         const chunkAny = chunk as any;
@@ -661,6 +677,16 @@ export async function createHTTPServer(options: HTTPServerOptions) {
             toolInput: perm.toolInput,
             isDangerous: perm.isDangerous,
             reason: perm.reason,
+          })}\n\n`);
+          (res as any).flush?.();
+        } else if (chunk.type === 'agent_invocation') {
+          // Subagent 调用事件（Agent Teams）
+          console.log('[HTTPServer] Sending agent event:', { agentName: chunk.agentName, phase: chunk.phase, task: (chunk.content || '').slice(0, 100) });
+          res.write(`event: agent\ndata: ${JSON.stringify({
+            agentName: chunk.agentName,
+            agentId: chunk.agentId,
+            phase: chunk.phase,
+            task: chunk.content,
           })}\n\n`);
           (res as any).flush?.();
         } else if (chunk.type === 'error') {
@@ -720,6 +746,7 @@ export async function createHTTPServer(options: HTTPServerOptions) {
         models: config.models.map(m => ({
           name: m.name,
           provider: m.provider || m.protocol || 'openai',
+          protocol: m.protocol,
           model: m.model
         })),
         defaultModel: config.defaultModel || (config.models.length > 0 ? config.models[0].name : null),
@@ -2408,6 +2435,148 @@ export async function createHTTPServer(options: HTTPServerOptions) {
     } catch (error) {
       console.error('[HTTPServer] Stop chat error:', error);
       res.status(500).json({ error: 'Failed to stop conversation' });
+    }
+  });
+
+  // ============================================================
+  // Agent Teams API
+  // ============================================================
+
+  // GET /api/agent-teams/tools — 返回可用工具列表（供前端 ToolSelector）
+  app.get('/api/agent-teams/tools', (_req, res) => {
+    res.json({
+      tools: [
+        { id: 'Read',          group: 'file',    label: 'Read' },
+        { id: 'Write',         group: 'file',    label: 'Write' },
+        { id: 'Edit',          group: 'file',    label: 'Edit' },
+        { id: 'Glob',          group: 'file',    label: 'Glob' },
+        { id: 'Grep',          group: 'file',    label: 'Grep' },
+        { id: 'Bash',          group: 'exec',    label: 'Bash' },
+        { id: 'WebSearch',     group: 'web',     label: 'WebSearch' },
+        { id: 'WebFetch',      group: 'web',     label: 'WebFetch' },
+        { id: 'firecrawl',     group: 'web',     label: 'Firecrawl' },
+        { id: 'remember',      group: 'memory',  label: 'Remember' },
+        { id: 'memory_search', group: 'memory',  label: 'Memory Search' },
+        { id: 'nas_list',      group: 'storage', label: 'NAS List' },
+        { id: 'nas_upload',    group: 'storage', label: 'NAS Upload' },
+        { id: 'nas_download',  group: 'storage', label: 'NAS Download' },
+        { id: 'send_file',     group: 'other',   label: 'Send File' },
+        { id: 'cron_manage',   group: 'other',   label: 'Cron Manage' },
+        { id: 'read_skill',    group: 'other',   label: 'Read Skill' },
+      ],
+    });
+  });
+
+  // GET /api/agent-teams/skills — 返回所有已安装的 Skills 列表（供 subagent 预加载选择）
+  app.get('/api/agent-teams/skills', (_req, res) => {
+    try {
+      const allSkills = options.skillsLoader.list().map(s => ({ name: s.name, description: s.description }));
+      res.json({ skills: allSkills });
+    } catch (error) {
+      res.status(500).json({ error: 'Failed to get skills' });
+    }
+  });
+
+  // GET /api/agent-teams — 列出所有团队（用户配置 + 预置未保存的示例）
+  app.get('/api/agent-teams', (_req, res) => {
+    try {
+      const config = getConfig();
+      const userTeams: AgentTeam[] = config.agentTeams || [];
+      // 将预置团队中尚未被用户保存的部分作为示例附上（标记 isPreset）
+      const userIds = new Set(userTeams.map(t => t.id));
+      const presets = PRESET_TEAMS
+        .filter(p => !userIds.has(p.id))
+        .map(p => ({ ...p, _isPreset: true }));
+      res.json({ teams: [...userTeams, ...presets] });
+    } catch (error) {
+      console.error('[HTTPServer] agent-teams GET error:', error);
+      res.status(500).json({ error: 'Failed to get agent teams' });
+    }
+  });
+
+  // POST /api/agent-teams — 创建团队
+  app.post('/api/agent-teams', async (req, res) => {
+    try {
+      const parsed = AgentTeamSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: 'Invalid team data', details: parsed.error.flatten() });
+      }
+      const newTeam = parsed.data;
+      const config = getConfig();
+      const teams: AgentTeam[] = config.agentTeams || [];
+      if (teams.some(t => t.id === newTeam.id)) {
+        return res.status(409).json({ error: `Team "${newTeam.id}" already exists` });
+      }
+      await saveConfig({ ...config, agentTeams: [...teams, newTeam] });
+      res.json({ success: true, team: newTeam });
+    } catch (error) {
+      console.error('[HTTPServer] agent-teams POST error:', error);
+      res.status(500).json({ error: 'Failed to create agent team' });
+    }
+  });
+
+  // PUT /api/agent-teams/:id — 更新团队
+  app.put('/api/agent-teams/:id', async (req, res) => {
+    try {
+      const { id } = req.params;
+      const parsed = AgentTeamSchema.safeParse({ ...req.body, id });
+      if (!parsed.success) {
+        return res.status(400).json({ error: 'Invalid team data', details: parsed.error.flatten() });
+      }
+      const updatedTeam = parsed.data;
+      const config = getConfig();
+      const teams: AgentTeam[] = config.agentTeams || [];
+      const idx = teams.findIndex(t => t.id === id);
+      if (idx === -1) {
+        // 若不存在（首次保存预置团队），直接追加
+        await saveConfig({ ...config, agentTeams: [...teams, updatedTeam] });
+      } else {
+        const newTeams = [...teams];
+        newTeams[idx] = updatedTeam;
+        await saveConfig({ ...config, agentTeams: newTeams });
+      }
+      res.json({ success: true, team: updatedTeam });
+    } catch (error) {
+      console.error('[HTTPServer] agent-teams PUT error:', error);
+      res.status(500).json({ error: 'Failed to update agent team' });
+    }
+  });
+
+  // DELETE /api/agent-teams/:id — 删除团队
+  app.delete('/api/agent-teams/:id', async (req, res) => {
+    try {
+      const { id } = req.params;
+      const config = getConfig();
+      const teams: AgentTeam[] = config.agentTeams || [];
+      const newTeams = teams.filter(t => t.id !== id);
+      if (newTeams.length === teams.length) {
+        return res.status(404).json({ error: 'Team not found' });
+      }
+      await saveConfig({ ...config, agentTeams: newTeams });
+      res.json({ success: true });
+    } catch (error) {
+      console.error('[HTTPServer] agent-teams DELETE error:', error);
+      res.status(500).json({ error: 'Failed to delete agent team' });
+    }
+  });
+
+  // POST /api/agent-teams/:id/toggle — 启用/禁用团队
+  app.post('/api/agent-teams/:id/toggle', async (req, res) => {
+    try {
+      const { id } = req.params;
+      const config = getConfig();
+      const teams: AgentTeam[] = config.agentTeams || [];
+      const idx = teams.findIndex(t => t.id === id);
+      if (idx === -1) {
+        return res.status(404).json({ error: 'Team not found' });
+      }
+      const newTeams = [...teams];
+      newTeams[idx] = { ...newTeams[idx], enabled: !newTeams[idx].enabled };
+      await saveConfig({ ...config, agentTeams: newTeams });
+      res.json({ success: true, enabled: newTeams[idx].enabled });
+    } catch (error) {
+      console.error('[HTTPServer] agent-teams toggle error:', error);
+      res.status(500).json({ error: 'Failed to toggle agent team' });
     }
   });
 

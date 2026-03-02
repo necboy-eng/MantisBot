@@ -315,6 +315,54 @@ export const EmailConfigSchema = z.object({
 export type EmailAccount = z.infer<typeof EmailAccountSchema>;
 export type EmailConfig = z.infer<typeof EmailConfigSchema>;
 
+// ============================================
+// Agent Teams 配置 Schema
+// ============================================
+
+export const AgentDefinitionSchema = z.object({
+  /** 何时调用此 Agent（直接映射 SDK AgentDefinition.description） */
+  description: z.string(),
+  /** Subagent 人格定义（映射到 SDK prompt） */
+  systemPrompt: z.string().optional(),
+  /** 允许使用的工具列表 */
+  tools: z.array(z.string()).optional(),
+  /** 禁用的工具列表 */
+  disallowedTools: z.array(z.string()).optional(),
+  /** 使用的模型，inherit 表示继承主 Agent 模型，或填写配置中的模型名称 */
+  model: z.string().default('inherit'),
+  /** 最大循环次数 */
+  maxTurns: z.number().int().min(1).max(200).optional(),
+  /** 预加载的 Skills 列表 */
+  skills: z.array(z.string()).optional(),
+});
+
+export const AgentTeamSchema = z.object({
+  /** 唯一 ID（slug 格式） */
+  id: z.string(),
+  /** 展示名称 */
+  name: z.string(),
+  /** 用途描述（用于 AI 自动判断） */
+  description: z.string().optional(),
+  /** 触发命令关键字（不含斜杠，如 "research"） */
+  triggerCommand: z.string().optional(),
+  /** AI 自动识别时匹配的关键词 */
+  autoDetectKeywords: z.array(z.string()).default([]),
+  /** 是否启用 */
+  enabled: z.boolean().default(true),
+  /** 主协调者配置 */
+  orchestrator: z.object({
+    /** 使用的模型名称，对应模型配置中 Anthropic 协议的模型 */
+    model: z.string().default('opus'),
+    systemPrompt: z.string().optional(),
+    maxTurns: z.number().int().min(1).max(200).default(50),
+  }),
+  /** Subagent 定义，key 为 Agent ID */
+  agents: z.record(z.string(), AgentDefinitionSchema),
+});
+
+export type AgentDefinition = z.infer<typeof AgentDefinitionSchema>;
+export type AgentTeam = z.infer<typeof AgentTeamSchema>;
+
 export const ConfigSchema = z.object({
   server: ServerConfigSchema,
   models: z.array(ModelConfigSchema).min(1),
@@ -404,6 +452,8 @@ export const ConfigSchema = z.object({
   email: EmailConfigSchema.optional(),
   // Firecrawl 网页搜索 API Key
   firecrawlApiKey: z.string().optional(),
+  // Agent Teams 配置
+  agentTeams: z.array(AgentTeamSchema).optional().default([]),
   // 可靠性和错误处理配置
   reliability: z.object({
     enabled: z.boolean().default(true),
