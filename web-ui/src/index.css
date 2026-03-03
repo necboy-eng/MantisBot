@@ -16,11 +16,9 @@ body {
   background-color: #f9fafb;
 }
 
-@media (prefers-color-scheme: dark) {
-  body {
-    background-color: #111827;
-    color: #f9fafb;
-  }
+.dark body {
+  background-color: #111827;
+  color: #f9fafb;
 }
 
 #root {
@@ -65,10 +63,8 @@ body {
   font-family: 'Monaco', 'Courier New', monospace;
 }
 
-@media (prefers-color-scheme: dark) {
-  .prose code {
-    background-color: #374151;
-  }
+.dark .prose code {
+  background-color: #374151;
 }
 
 .prose pre {
@@ -94,11 +90,9 @@ body {
   color: #6b7280;
 }
 
-@media (prefers-color-scheme: dark) {
-  .prose blockquote {
-    border-left-color: #4b5563;
-    color: #9ca3af;
-  }
+.dark .prose blockquote {
+  border-left-color: #4b5563;
+  color: #9ca3af;
 }
 
 .prose a {
@@ -133,10 +127,8 @@ body {
   border-radius: 3px;
 }
 
-@media (prefers-color-scheme: dark) {
-  ::-webkit-scrollbar-thumb {
-    background: #4b5563;
-  }
+.dark ::-webkit-scrollbar-thumb {
+  background: #4b5563;
 }
 
 /* Terminal 样式 - macOS zsh 风格 */

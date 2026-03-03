@@ -12,6 +12,7 @@ import { SettingsPanel } from './components/SettingsPanel';
 import { ModelConfigPrompt, useModelConfigCheck, markModelConfigPending, markModelConfigured } from './components/ModelConfigPrompt';
 import { LoginPage } from './components/LoginPage';
 import { LanguageSwitcher } from './components/LanguageSwitcher';
+import { ThemeSwitcher } from './components/ThemeSwitcher';
 import { MessageBubble } from './components/MessageBubble';
 import { LogDrawer } from './components/LogDrawer';
 import type { LogEntry } from './components/LogDrawer';
@@ -2269,6 +2270,8 @@ function App() {
             )}
             {/* Language Switcher */}
             <LanguageSwitcher />
+            {/* Theme Switcher */}
+            <ThemeSwitcher />
           </div>
           <div className="flex items-center gap-3">
             {/* Canvas Button */}
