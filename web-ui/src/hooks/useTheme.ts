@@ -23,7 +23,7 @@ function applyToDocument(dark: boolean) {
 export function useTheme() {
   const [theme, setThemeState] = useState<ThemeMode>(() => {
     const saved = localStorage.getItem(STORAGE_KEY) as ThemeMode | null;
-    return saved ?? 'system';
+    return saved ?? 'dark';
   });
 
   /** 持久化并立即应用主题 */

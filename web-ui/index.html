@@ -13,8 +13,7 @@
       // 防止页面闪烁（FOUC）：在 React 渲染前同步应用主题 class
       (function () {
         var saved = localStorage.getItem('theme-preference');
-        var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-        var shouldDark = saved === 'dark' || (saved !== 'light' && prefersDark);
+        var shouldDark = saved !== 'light' && saved !== 'system';
         if (shouldDark) document.documentElement.classList.add('dark');
       })();
     </script>
