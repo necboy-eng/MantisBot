@@ -58,18 +58,97 @@ export interface Message {
 
 interface MessageBubbleProps {
   msg: Message;
-  // 展开/折叠思考内容和工具详情（状态由父组件管理以保持跨渲染一致）
   expandedThinking: Set<string>;
   onToggleExpand: (key: string) => void;
-  // 附件操作
   onOpenCanvas: (attachment: FileAttachment) => void;
-  // 消息操作
   onResend: (msg: Message) => void;
   onDelete: (msg: Message) => void;
-  // 工具名称显示辅助函数（由 App.tsx 传入以保持共享逻辑）
   getToolDisplayName: (toolName: string) => string;
   formatToolArgs: (toolName: string, args: Record<string, unknown> | undefined) => string;
   FileAttachmentCard: React.FC<{ attachment: FileAttachment; onOpenCanvas: () => void }>;
+}
+
+// ─── 工具类型视觉映射 ──────────────────────────────────────────────────────────
+
+interface ToolTheme {
+  icon: string;
+  dotColor: string;
+  lineColor: string;
+  badgeBg: string;
+  badgeText: string;
+  runningText: string;
+}
+
+function getToolTheme(toolName: string, isError: boolean): ToolTheme {
+  if (isError) {
+    return {
+      icon: '✗',
+      dotColor: 'bg-red-500',
+      lineColor: 'bg-red-200 dark:bg-red-800/60',
+      badgeBg: 'bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800',
+      badgeText: 'text-red-600 dark:text-red-400',
+      runningText: 'text-red-500',
+    };
+  }
+  const name = toolName.toLowerCase();
+  if (name === 'read' || name === 'glob' || name === 'grep') {
+    return {
+      icon: '📂',
+      dotColor: 'bg-sky-500',
+      lineColor: 'bg-sky-200 dark:bg-sky-800/60',
+      badgeBg: 'bg-sky-50 dark:bg-sky-950/40 border border-sky-200 dark:border-sky-800',
+      badgeText: 'text-sky-700 dark:text-sky-300',
+      runningText: 'text-sky-500',
+    };
+  }
+  if (name === 'write' || name === 'edit') {
+    return {
+      icon: '✏️',
+      dotColor: 'bg-emerald-500',
+      lineColor: 'bg-emerald-200 dark:bg-emerald-800/60',
+      badgeBg: 'bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800',
+      badgeText: 'text-emerald-700 dark:text-emerald-300',
+      runningText: 'text-emerald-500',
+    };
+  }
+  if (name === 'exec' || name === 'bash') {
+    return {
+      icon: '⚡',
+      dotColor: 'bg-amber-500',
+      lineColor: 'bg-amber-200 dark:bg-amber-800/60',
+      badgeBg: 'bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800',
+      badgeText: 'text-amber-700 dark:text-amber-300',
+      runningText: 'text-amber-500',
+    };
+  }
+  if (name.startsWith('browser')) {
+    return {
+      icon: '🌐',
+      dotColor: 'bg-violet-500',
+      lineColor: 'bg-violet-200 dark:bg-violet-800/60',
+      badgeBg: 'bg-violet-50 dark:bg-violet-950/40 border border-violet-200 dark:border-violet-800',
+      badgeText: 'text-violet-700 dark:text-violet-300',
+      runningText: 'text-violet-500',
+    };
+  }
+  if (name === 'memory_search' || name === 'remember') {
+    return {
+      icon: '🔍',
+      dotColor: 'bg-indigo-500',
+      lineColor: 'bg-indigo-200 dark:bg-indigo-800/60',
+      badgeBg: 'bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800',
+      badgeText: 'text-indigo-700 dark:text-indigo-300',
+      runningText: 'text-indigo-500',
+    };
+  }
+  return {
+    icon: '⚙️',
+    dotColor: 'bg-gray-400',
+    lineColor: 'bg-gray-200 dark:bg-gray-700',
+    badgeBg: 'bg-gray-50 dark:bg-gray-800/60 border border-gray-200 dark:border-gray-700',
+    badgeText: 'text-gray-600 dark:text-gray-400',
+    runningText: 'text-gray-500',
+  };
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -89,6 +168,7 @@ export function MessageBubble({
   const [copied, setCopied] = useState(false);
 
   const isUser = msg.role === 'user';
+  const isStreaming = !msg.content && msg.thinking !== undefined;
 
   function handleCopy() {
     navigator.clipboard.writeText(msg.content).then(() => {
@@ -103,21 +183,48 @@ export function MessageBubble({
     }
   }
 
-  // ── Action buttons ──────────────────────────────────────────────────────────
+  // ── 头像 ─────────────────────────────────────────────────────────────────────
+
+  const UserAvatar = (
+    <div className="w-8 h-8 rounded-full bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center text-white text-sm font-semibold ring-2 ring-white dark:ring-gray-900 shadow-sm flex-shrink-0">
+      U
+    </div>
+  );
+
+  const AssistantAvatar = (
+    <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ring-2 ring-white dark:ring-gray-900 shadow-sm
+      ${isStreaming
+        ? 'bg-gradient-to-br from-slate-700 to-slate-900 ring-violet-400/60 dark:ring-violet-500/40 animate-pulse'
+        : 'bg-gradient-to-br from-slate-700 to-slate-900'
+      }`}
+    >
+      {/* 节点图标 SVG */}
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" className="text-white">
+        <circle cx="8" cy="3" r="2" fill="currentColor" opacity="0.9" />
+        <circle cx="3" cy="11" r="2" fill="currentColor" opacity="0.7" />
+        <circle cx="13" cy="11" r="2" fill="currentColor" opacity="0.7" />
+        <line x1="8" y1="5" x2="3" y2="9" stroke="currentColor" strokeWidth="1.2" opacity="0.5" />
+        <line x1="8" y1="5" x2="13" y2="9" stroke="currentColor" strokeWidth="1.2" opacity="0.5" />
+        <line x1="3" y1="11" x2="13" y2="11" stroke="currentColor" strokeWidth="1.2" opacity="0.5" />
+      </svg>
+    </div>
+  );
+
+  // ── 操作按钮 ──────────────────────────────────────────────────────────────────
 
   const UserActions = (
-    <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity duration-150">
+    <div className="flex items-center gap-0.5 opacity-20 group-hover:opacity-100 transition-opacity duration-200">
       <button
         onClick={() => onResend(msg)}
         title={t('message.resend')}
-        className="p-1.5 rounded-md text-gray-400 hover:text-primary-500 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+        className="p-1.5 rounded-lg text-gray-400 hover:text-indigo-500 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 transition-colors"
       >
         <RotateCcw className="w-3.5 h-3.5" />
       </button>
       <button
         onClick={handleDelete}
         title={t('message.delete')}
-        className="p-1.5 rounded-md text-gray-400 hover:text-red-500 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+        className="p-1.5 rounded-lg text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30 transition-colors"
       >
         <Trash2 className="w-3.5 h-3.5" />
       </button>
@@ -125,14 +232,18 @@ export function MessageBubble({
   );
 
   const AssistantActions = (
-    <div className="flex items-center gap-0.5 mt-1.5 opacity-0 group-hover:opacity-100 transition-opacity duration-150">
+    <div className="flex items-center gap-0.5 mt-2 opacity-20 group-hover:opacity-100 transition-opacity duration-200">
       <button
         onClick={handleCopy}
         title={copied ? t('message.copied') : t('message.copy')}
-        className="flex items-center gap-1 px-2 py-1 rounded-md text-xs text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+        className={`flex items-center gap-1 px-2 py-1 rounded-lg text-xs transition-all duration-200 ${
+          copied
+            ? 'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-600 dark:text-emerald-400'
+            : 'text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800'
+        }`}
       >
         {copied ? (
-          <><Check className="w-3 h-3 text-green-500" /><span className="text-green-500">{t('message.copied')}</span></>
+          <><Check className="w-3 h-3" /><span>{t('message.copied')}</span></>
         ) : (
           <><Copy className="w-3 h-3" /><span>{t('message.copy')}</span></>
         )}
@@ -140,7 +251,7 @@ export function MessageBubble({
       <button
         onClick={handleDelete}
         title={t('message.delete')}
-        className="flex items-center gap-1 px-2 py-1 rounded-md text-xs text-gray-400 hover:text-red-500 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+        className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30 transition-colors"
       >
         <Trash2 className="w-3 h-3" />
         <span>{t('message.delete')}</span>
@@ -148,205 +259,262 @@ export function MessageBubble({
     </div>
   );
 
-  // ── Render ──────────────────────────────────────────────────────────────────
+  // ── 工具调用时间轴 ────────────────────────────────────────────────────────────
 
-  return (
-    <div className={`flex gap-3 group ${isUser ? 'flex-row-reverse' : ''}`}>
-      {/* 头像 */}
-      <div className="flex-shrink-0">
-        {isUser ? (
-          <div className="w-8 h-8 rounded-full bg-primary-600 flex items-center justify-center text-white text-sm font-medium">
-            U
+  const formatResult = (result: unknown): string => {
+    if (!result) return '';
+    if (typeof result === 'string') return result;
+    try { return JSON.stringify(result, null, 2); } catch { return String(result); }
+  };
+
+  const ToolTimeline = ({ toolStatus }: { toolStatus: ToolStatus[] }) => (
+    <div className="space-y-0 my-1.5">
+      {toolStatus.map((tool, idx) => {
+        const isRunning = tool.status === 'start';
+        const isError = !!tool.isError;
+        const isLast = idx === toolStatus.length - 1;
+        const toolExpKey = `${msg.id}-tool-${idx}`;
+        const expanded = expandedThinking.has(toolExpKey);
+        const theme = getToolTheme(tool.tool, isError);
+
+        // remember 工具专属徽章
+        if (tool.tool === 'remember' && tool.status === 'end' && !isError) {
+          const remResult = tool.result as { content?: string };
+          const savedContent = remResult?.content || '';
+          const truncated = savedContent.length > 50
+            ? savedContent.slice(0, 50) + '…'
+            : savedContent;
+          return (
+            <div key={idx} className="flex gap-2.5">
+              <div className="flex flex-col items-center flex-shrink-0" style={{ width: 18 }}>
+                <div className="w-3 h-3 rounded-full bg-indigo-500 flex-shrink-0 mt-0.5" />
+                {!isLast && <div className="w-0.5 flex-1 mt-1 bg-indigo-200 dark:bg-indigo-800/60 min-h-[12px]" />}
+              </div>
+              <div className={`flex-1 pb-${isLast ? '0' : '2'} min-w-0 mb-1.5`}>
+                <div className="flex items-start gap-1.5 px-2.5 py-1.5 rounded-lg border border-indigo-300 dark:border-indigo-700 bg-indigo-50 dark:bg-indigo-950/40">
+                  <span className="text-xs mt-0.5 flex-shrink-0">📌</span>
+                  <div className="min-w-0">
+                    <span className="text-xs font-medium text-indigo-600 dark:text-indigo-400">已保存到记忆</span>
+                    {truncated && (
+                      <span className="text-xs text-indigo-500 dark:text-indigo-500 ml-1">"{truncated}"</span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        }
+
+        const rawPreview = formatToolArgs(tool.tool, tool.args);
+        const argsPreview = rawPreview.slice(0, 55) + (rawPreview.length > 55 ? '…' : '');
+        const resultText = formatResult(tool.result);
+
+        return (
+          <div key={idx} className="flex gap-2.5">
+            {/* 时间轴线 + 节点 */}
+            <div className="flex flex-col items-center flex-shrink-0" style={{ width: 18 }}>
+              <div className={`
+                w-3 h-3 rounded-full flex-shrink-0 mt-0.5 flex items-center justify-center
+                ${isRunning
+                  ? `${theme.dotColor} animate-pulse ring-2 ring-offset-1 ring-offset-gray-100 dark:ring-offset-gray-800 ring-current/30`
+                  : `${theme.dotColor} ${!isRunning ? 'tool-step-done' : ''}`
+                }
+              `} />
+              {!isLast && (
+                <div className={`w-0.5 flex-1 mt-1 ${theme.lineColor} min-h-[14px]`} />
+              )}
+            </div>
+
+            {/* 步骤卡 */}
+            <div className={`flex-1 pb-${isLast ? '0' : '2'} min-w-0 mb-1`}>
+              <button
+                onClick={() => onToggleExpand(toolExpKey)}
+                className={`w-full text-left px-2.5 py-1.5 rounded-lg transition-all duration-150 hover:brightness-95 dark:hover:brightness-110 ${theme.badgeBg}`}
+              >
+                <div className="flex items-center gap-1.5 min-w-0">
+                  {/* 状态图标 */}
+                  {isRunning ? (
+                    <svg className="w-3 h-3 animate-spin text-gray-400 flex-shrink-0" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                    </svg>
+                  ) : isError ? (
+                    <span className={`text-xs flex-shrink-0 ${theme.badgeText}`}>✗</span>
+                  ) : (
+                    <span className={`text-xs flex-shrink-0 ${theme.badgeText}`}>✓</span>
+                  )}
+                  {/* 工具 emoji */}
+                  <span className="text-xs flex-shrink-0">{theme.icon}</span>
+                  {/* 工具名 */}
+                  <span className={`text-xs font-mono font-medium flex-shrink-0 ${theme.badgeText}`}>
+                    {getToolDisplayName(tool.tool)}
+                  </span>
+                  {/* 参数预览 */}
+                  {argsPreview && (
+                    <span className="text-xs text-gray-400 dark:text-gray-600 truncate font-mono min-w-0">
+                      ({argsPreview})
+                    </span>
+                  )}
+                  {/* 展开箭头 */}
+                  <svg
+                    className={`w-2.5 h-2.5 flex-shrink-0 ml-auto transition-transform duration-150 text-gray-400 ${expanded ? 'rotate-90' : ''}`}
+                    fill="currentColor"
+                    viewBox="0 0 20 20"
+                  >
+                    <path fillRule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clipRule="evenodd" />
+                  </svg>
+                </div>
+              </button>
+
+              {/* 展开详情 */}
+              {expanded && (
+                <div className="mt-1 ml-1 pl-3 border-l-2 border-gray-200 dark:border-gray-700 space-y-1.5">
+                  {tool.args && (
+                    <pre className="text-xs text-gray-500 dark:text-gray-400 whitespace-pre-wrap break-words leading-relaxed">
+                      {formatToolArgs(tool.tool, tool.args)}
+                    </pre>
+                  )}
+                  {tool.status === 'end' && (
+                    <pre className={`text-xs whitespace-pre-wrap break-words max-h-40 overflow-y-auto leading-relaxed ${
+                      isError ? 'text-red-400' : 'text-gray-400 dark:text-gray-500'
+                    }`}>
+                      {resultText || '(无输出)'}
+                    </pre>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
-        ) : (
-          <div className="w-8 h-8 rounded-full bg-gradient-to-br from-purple-500 to-blue-500 flex items-center justify-center text-white text-sm">
-            🤖
+        );
+      })}
+    </div>
+  );
+
+  // ── 思考过程区块 ───────────────────────────────────────────────────────────────
+
+  const ThinkingBlock = () => {
+    if (!msg.thinking) return null;
+    const isOpen = expandedThinking.has(msg.id);
+    const isActive = !msg.content;
+
+    return (
+      <div className="mb-2 rounded-xl border border-violet-200 dark:border-violet-800/50 bg-violet-50/60 dark:bg-violet-950/20 overflow-hidden">
+        {/* 标题栏 */}
+        <button
+          onClick={() => onToggleExpand(msg.id)}
+          className="w-full flex items-center gap-2 px-3 py-2 hover:bg-violet-100/50 dark:hover:bg-violet-900/20 transition-colors"
+        >
+          <span className="text-base leading-none select-none">🧠</span>
+          <span className="text-xs font-medium text-violet-700 dark:text-violet-300 flex-1 text-left">
+            {isActive ? (
+              <span className="flex items-center gap-1.5">
+                思考中
+                <span className="flex gap-0.5 items-center">
+                  <span className="wave-dot w-1 h-1 rounded-full bg-violet-400 inline-block" />
+                  <span className="wave-dot w-1 h-1 rounded-full bg-violet-400 inline-block" />
+                  <span className="wave-dot w-1 h-1 rounded-full bg-violet-400 inline-block" />
+                </span>
+              </span>
+            ) : isOpen ? '思考过程' : '思考过程（已折叠）'}
+          </span>
+          <svg
+            className={`w-3.5 h-3.5 text-violet-400 transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`}
+            fill="currentColor" viewBox="0 0 20 20"
+          >
+            <path fillRule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clipRule="evenodd" />
+          </svg>
+        </button>
+
+        {/* 呼吸进度条（仅流式时显示） */}
+        {isActive && (
+          <div className="relative h-0.5 bg-violet-100 dark:bg-violet-900/40 overflow-hidden mx-3 mb-1 rounded-full">
+            <div className="thinking-bar absolute inset-y-0 left-0 bg-violet-400 dark:bg-violet-500 rounded-full" />
           </div>
         )}
+
+        {/* 展开内容 — grid-rows trick */}
+        <div className={`thinking-collapsible ${isOpen ? 'open' : ''}`}>
+          <div>
+            <div className="px-3 pb-3 pt-1">
+              <pre className="text-xs text-violet-600/80 dark:text-violet-400/70 whitespace-pre-wrap font-normal leading-relaxed italic max-h-52 overflow-y-auto">
+                {msg.thinking}
+                {isActive && (
+                  <span className="inline-block w-1.5 h-3.5 bg-violet-400 animate-pulse ml-0.5 align-text-bottom rounded-sm" />
+                )}
+              </pre>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // ── 渲染 ───────────────────────────────────────────────────────────────────────
+
+  return (
+    <div className={`flex gap-3 group ${isUser ? 'flex-row-reverse msg-user' : 'msg-assistant'}`}>
+      {/* 头像 */}
+      <div className="flex-shrink-0 mt-0.5">
+        {isUser ? UserAvatar : AssistantAvatar}
       </div>
 
       {/* 消息内容区 */}
       <div className={`flex-1 min-w-0 ${isUser ? 'max-w-[80%] md:max-w-[70%]' : ''}`}>
-        {/* 消息头：用户消息在右侧显示操作按钮 */}
-        <div className={`flex items-center gap-2 mb-1 ${isUser ? 'justify-end' : ''}`}>
-          {/* 用户消息操作按钮（头部左侧，因为气泡在右） */}
+        {/* 消息头 */}
+        <div className={`flex items-center gap-2 mb-1.5 ${isUser ? 'justify-end' : ''}`}>
           {isUser && UserActions}
-          <span className="text-xs text-gray-500 dark:text-gray-400">
+          <span className="text-xs text-gray-400 dark:text-gray-500 select-none">
             {isUser ? t('message.you', '你') : t('message.assistant', '助手')}
           </span>
         </div>
 
-        {/* 消息主体 */}
-        <div
-          className={`px-4 py-3 rounded-lg overflow-hidden ${
-            isUser
-              ? 'bg-primary-600 text-white'
-              : 'bg-gray-100 dark:bg-gray-800 border border-gray-200 dark:border-gray-700'
-          }`}
-        >
-          {isUser ? (
-            <div className="break-words whitespace-pre-wrap">{msg.content}</div>
-          ) : (
-            <div className="space-y-1">
+        {/* ── 用户气泡 ── */}
+        {isUser ? (
+          <div className="relative px-4 py-3 rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-600 text-white shadow-sm overflow-hidden">
+            {/* grain 质感叠层 */}
+            <div
+              className="absolute inset-0 pointer-events-none"
+              style={{
+                backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.75' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E")`,
+                opacity: 0.6,
+              }}
+            />
+            <div className="relative break-words whitespace-pre-wrap">{msg.content}</div>
+          </div>
+        ) : (
+          /* ── AI 气泡 ── */
+          <div className="px-4 py-3 rounded-2xl bg-white dark:bg-gray-800/80 border border-gray-100 dark:border-gray-700/50 shadow-sm backdrop-blur-sm overflow-hidden">
+            <div className="space-y-1.5">
               {/* 思考过程 */}
-              {msg.thinking && (
-                <div className="text-sm">
-                  <button
-                    onClick={() => onToggleExpand(msg.id)}
-                    className="flex items-center gap-1.5 text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 transition-colors py-0.5"
-                  >
-                    <svg
-                      className={`w-3 h-3 transition-transform duration-150 ${expandedThinking.has(msg.id) ? 'rotate-90' : ''}`}
-                      fill="currentColor"
-                      viewBox="0 0 20 20"
-                    >
-                      <path
-                        fillRule="evenodd"
-                        d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z"
-                        clipRule="evenodd"
-                      />
-                    </svg>
-                    <span className="text-xs italic">
-                      {!msg.content ? (
-                        <span className="flex items-center gap-1.5">
-                          思考中
-                          <span className="flex gap-0.5">
-                            <span className="w-1 h-1 rounded-full bg-gray-400 animate-bounce" style={{ animationDelay: '0ms' }} />
-                            <span className="w-1 h-1 rounded-full bg-gray-400 animate-bounce" style={{ animationDelay: '150ms' }} />
-                            <span className="w-1 h-1 rounded-full bg-gray-400 animate-bounce" style={{ animationDelay: '300ms' }} />
-                          </span>
-                        </span>
-                      ) : '思考过程'}
-                    </span>
-                  </button>
-                  {expandedThinking.has(msg.id) && (
-                    <div className="mt-1 ml-4 pl-3 border-l-2 border-gray-200 dark:border-gray-700">
-                      <pre className="text-xs whitespace-pre-wrap text-gray-500 dark:text-gray-400 font-normal leading-relaxed max-h-48 overflow-y-auto">
-                        {msg.thinking}
-                        {!msg.content && (
-                          <span className="inline-block w-1.5 h-3.5 bg-gray-400 animate-pulse ml-0.5 align-text-bottom" />
-                        )}
-                      </pre>
-                    </div>
-                  )}
-                </div>
-              )}
+              <ThinkingBlock />
 
               {/* Agent Teams 时间线 */}
               {msg.agentInvocations && msg.agentInvocations.length > 0 && (
                 <AgentTimeline invocations={msg.agentInvocations} />
               )}
 
-              {/* 工具调用展示 */}
+              {/* 工具调用时间轴 */}
               {msg.toolStatus && msg.toolStatus.length > 0 && (
-                <div className="space-y-0.5">
-                  {msg.toolStatus.map((tool, idx) => {
-                    const isRunning = tool.status === 'start';
-                    const isError = tool.isError;
-                    const toolExpKey = `${msg.id}-tool-${idx}`;
-
-                    // remember 工具专属徽章
-                    if (tool.tool === 'remember' && tool.status === 'end' && !isError) {
-                      const remResult = tool.result as { content?: string };
-                      const savedContent = remResult?.content || '';
-                      const truncated = savedContent.length > 40 ? savedContent.slice(0, 40) + '…' : savedContent;
-                      return (
-                        <div
-                          key={idx}
-                          className="flex items-start gap-1.5 px-2 py-1.5 rounded-md border border-indigo-300 dark:border-indigo-700 bg-indigo-50 dark:bg-indigo-950/40"
-                        >
-                          <span className="text-xs mt-0.5 flex-shrink-0">📌</span>
-                          <div className="min-w-0">
-                            <span className="text-xs font-medium text-indigo-600 dark:text-indigo-400">已保存到记忆</span>
-                            {truncated && (
-                              <span className="text-xs text-indigo-500 dark:text-indigo-500 ml-1">"{truncated}"</span>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    }
-
-                    const formatResult = (result: unknown): string => {
-                      if (!result) return '';
-                      if (typeof result === 'string') return result;
-                      try { return JSON.stringify(result, null, 2); } catch { return String(result); }
-                    };
-
-                    const rawPreview = formatToolArgs(tool.tool, tool.args);
-                    const argsPreview = rawPreview.slice(0, 60) + (rawPreview.length > 60 ? '…' : '');
-
-                    return (
-                      <div key={idx} className="text-sm">
-                        <button
-                          onClick={() => onToggleExpand(toolExpKey)}
-                          className="flex items-center gap-1.5 text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 transition-colors py-0.5 w-full text-left"
-                        >
-                          {isRunning ? (
-                            <svg className="w-3 h-3 animate-spin text-blue-400 flex-shrink-0" fill="none" viewBox="0 0 24 24">
-                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                            </svg>
-                          ) : isError ? (
-                            <span className="w-3 h-3 flex-shrink-0 text-red-400 text-xs leading-none">✗</span>
-                          ) : (
-                            <span className="w-3 h-3 flex-shrink-0 text-green-400 text-xs leading-none">✓</span>
-                          )}
-                          <svg
-                            className={`w-2.5 h-2.5 flex-shrink-0 transition-transform duration-150 ${expandedThinking.has(toolExpKey) ? 'rotate-90' : ''}`}
-                            fill="currentColor"
-                            viewBox="0 0 20 20"
-                          >
-                            <path
-                              fillRule="evenodd"
-                              d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z"
-                              clipRule="evenodd"
-                            />
-                          </svg>
-                          <span className="text-xs font-mono truncate">
-                            <span className={isError ? 'text-red-400' : isRunning ? 'text-blue-400' : 'text-gray-500 dark:text-gray-400'}>
-                              {getToolDisplayName(tool.tool)}
-                            </span>
-                            {argsPreview && (
-                              <span className="text-gray-400 dark:text-gray-600">({argsPreview})</span>
-                            )}
-                          </span>
-                        </button>
-                        {expandedThinking.has(toolExpKey) && (
-                          <div className="mt-0.5 ml-4 pl-3 border-l-2 border-gray-200 dark:border-gray-700 space-y-1">
-                            {tool.args && (
-                              <pre className="text-xs text-gray-500 dark:text-gray-400 whitespace-pre-wrap break-words">
-                                {formatToolArgs(tool.tool, tool.args)}
-                              </pre>
-                            )}
-                            {tool.status === 'end' && (
-                              <pre className={`text-xs whitespace-pre-wrap break-words max-h-40 overflow-y-auto ${isError ? 'text-red-400' : 'text-gray-400 dark:text-gray-500'}`}>
-                                {formatResult(tool.result) || '(无输出)'}
-                              </pre>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
+                <ToolTimeline toolStatus={msg.toolStatus} />
               )}
 
               {/* 主内容 */}
               {msg.content.trim() || msg.thinking || (msg.toolStatus && msg.toolStatus.length > 0) ? (
-                <div className="prose prose-sm dark:prose-invert max-w-none break-words [&_pre]:bg-gray-900 [&_pre]:p-3 [&_pre]:rounded-lg [&_pre]:overflow-x-auto [&_code]:text-sm [&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1 [&_li]:my-0.5 [&_table]:block [&_table]:w-full [&_table]:overflow-x-auto [&_th]:whitespace-nowrap [&_td]:whitespace-nowrap">
+                <div className="prose prose-sm dark:prose-invert max-w-none break-words [&_pre]:bg-gray-900 [&_pre]:p-3 [&_pre]:rounded-xl [&_pre]:overflow-x-auto [&_code]:text-sm [&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1 [&_li]:my-0.5 [&_table]:block [&_table]:w-full [&_table]:overflow-x-auto [&_th]:whitespace-nowrap [&_td]:whitespace-nowrap">
                   <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
                 </div>
               ) : (
-                <div className="flex items-center gap-1.5 py-1">
-                  <span className="w-1.5 h-1.5 rounded-full bg-gray-400 animate-bounce" style={{ animationDelay: '0ms' }} />
-                  <span className="w-1.5 h-1.5 rounded-full bg-gray-400 animate-bounce" style={{ animationDelay: '150ms' }} />
-                  <span className="w-1.5 h-1.5 rounded-full bg-gray-400 animate-bounce" style={{ animationDelay: '300ms' }} />
+                /* 波形加载态 */
+                <div className="flex items-center gap-1 py-1 px-0.5">
+                  <span className="wave-dot w-2 h-2 rounded-full bg-gray-400 dark:bg-gray-500 inline-block" />
+                  <span className="wave-dot w-2 h-2 rounded-full bg-gray-400 dark:bg-gray-500 inline-block" />
+                  <span className="wave-dot w-2 h-2 rounded-full bg-gray-400 dark:bg-gray-500 inline-block" />
                 </div>
               )}
 
               {/* 附件 */}
               {msg.attachments && msg.attachments.length > 0 && (
-                <div className="space-y-2">
+                <div className="space-y-2 mt-2">
                   {msg.attachments.map(attachment => (
                     <FileAttachmentCard
                       key={attachment.id}
@@ -362,10 +530,10 @@ export function MessageBubble({
                 <SkillChainDisplay skills={msg.skillChain} />
               )}
             </div>
-          )}
-        </div>
+          </div>
+        )}
 
-        {/* AI 消息操作按钮（气泡下方） */}
+        {/* AI 操作按钮 */}
         {!isUser && AssistantActions}
       </div>
     </div>
