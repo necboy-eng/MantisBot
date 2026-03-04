@@ -1,13 +1,14 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { MessageCircle, Settings, Plus, Bot, FileText, Download, Image, Trash2, ExternalLink, Clock, LayoutDashboard, Wifi, FolderOpen, Square, CheckSquare, LogOut, Star, ChevronDown, ChevronRight, ChevronLeft, Terminal } from 'lucide-react';
-import { CanvasPanel, FileItem, BrowserSnapshot, TerminalOutput } from './components/CanvasPanel';
+import { CanvasPanel, FileItem, BrowserSnapshot, TerminalOutput, SearchUrlList } from './components/CanvasPanel';
 import { CronPanel } from './components/CronPanel';
 import { TunnelPanel } from './components/TunnelPanel';
 import { NotificationBell } from './components/NotificationBell';
 import PermissionModal from './components/PermissionModal';
 import { NotificationPanel, Notification } from './components/NotificationPanel';
 import { NotificationDetail } from './components/NotificationDetail';
-import { FileReferenceTags } from './components/FileReferenceTags';  // 新增
+import { ContextReferenceTags } from './components/ContextReferenceTags';
+import type { ContextReference, NasReference, EmailReference } from './types/context-reference';
 import { SettingsPanel } from './components/SettingsPanel';
 import { ModelConfigPrompt, useModelConfigCheck, markModelConfigPending, markModelConfigured } from './components/ModelConfigPrompt';
 import { LoginPage } from './components/LoginPage';
@@ -98,17 +99,7 @@ interface Config {
   officePreviewServer?: string;  // Office 文件预览服务器地址
 }
 
-// 新增：文件引用类型
-interface FileReference {
-  id: string;
-  path: string;
-  name: string;
-  type: 'file' | 'directory';
-  size?: number;
-  ext?: string;
-  mimeType?: string;
-  addedAt: number;
-}
+// 文件引用类型已迁移到 src/types/context-reference.ts
 
 // 格式化文件大小
 function formatFileSize(bytes: number): string {
@@ -318,6 +309,7 @@ function App() {
   // 画布相关状态：浏览器截图和终端输出
   const [browserSnapshots, setBrowserSnapshots] = useState<BrowserSnapshot[]>([]);
   const [terminalOutputs, setTerminalOutputs] = useState<TerminalOutput[]>([]);
+  const [searchUrlLists, setSearchUrlLists] = useState<SearchUrlList[]>([]); // 搜索 URL 列表
   const [canvasForceMode, setCanvasForceMode] = useState<'preview' | 'files' | 'browser' | 'terminal' | undefined>(undefined);
   const [selectedNotification, setSelectedNotification] = useState<Notification | null>(null);
 
@@ -343,8 +335,8 @@ function App() {
   // ���前工作目录
   const [currentWorkDir, setCurrentWorkDir] = useState<string>('/');
 
-  // 新增：文件引用状态
-  const [fileReferences, setFileReferences] = useState<FileReference[]>([]);
+  // 统一上下文引用状态（NAS 文件 + 邮件）
+  const [fileReferences, setFileReferences] = useState<ContextReference[]>([]);
 
   // 设置面板状态
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -467,22 +459,29 @@ function App() {
     console.log('[React] activeSkill changed:', activeSkill);
   }, [activeSkill]);
 
-  // 新增：添加文件引用（防止重复）
+  // 添加 NAS 文件引用（防止重复）
   const addFileReference = (item: { path: string; name: string; type: 'file' | 'directory'; size?: number; ext?: string }) => {
     setFileReferences(prev => {
-      // 防止重复添加
-      if (prev.some(ref => ref.path === item.path)) {
-        return prev;
-      }
-      return [...prev, {
+      if (prev.some(ref => ref.source === 'nas' && ref.path === item.path)) return prev;
+      const ref: NasReference = {
+        source: 'nas',
         id: generateUUID(),
         path: item.path,
         name: item.name,
         type: item.type,
         size: item.size,
         ext: item.ext,
-        addedAt: Date.now()
-      }];
+        addedAt: Date.now(),
+      };
+      return [...prev, ref];
+    });
+  };
+
+  // 添加邮件引用（防止重复）
+  const addEmailReference = (ref: EmailReference) => {
+    setFileReferences(prev => {
+      if (prev.some(r => r.source === 'email' && r.uid === ref.uid && r.mailbox === ref.mailbox)) return prev;
+      return [...prev, ref];
     });
   };
 
@@ -980,6 +979,22 @@ function App() {
               return newMessages;
             });
           }
+
+          // 处理搜索 URL 列表事件
+          if (data.type === 'search-urls') {
+            console.log('[WebSocket] Search URLs event received:', data);
+            const { query, urls, timestamp } = data.payload;
+            const newSearchList: SearchUrlList = {
+              id: generateUUID(),
+              query,
+              urls,
+              timestamp: timestamp || Date.now()
+            };
+            setSearchUrlLists(prev => [...prev, newSearchList]);
+            // 自动打开画布并切换到浏览器标签的搜索结果视图
+            setCanvasOpen(true);
+            setCanvasForceMode('browser');
+          }
         } catch (e) {
           console.error('[WebSocket] Failed to parse message:', e);
         }
@@ -1425,6 +1440,16 @@ function App() {
     }, 0);
   }
 
+  // 程序化发送消息（供 EmailPanel 等子组件调用）
+  function sendProgrammatic(message: string) {
+    if (loading) return;
+    setInput(message);
+    setTimeout(() => {
+      const form = document.querySelector<HTMLFormElement>('form[data-chat-form]');
+      form?.requestSubmit();
+    }, 0);
+  }
+
   async function sendMessage(e: React.FormEvent) {
     e.preventDefault();
     if (!input.trim() || loading) return;
@@ -1447,25 +1472,67 @@ function App() {
       }
     };
 
-    // 新增：构建完整的用户���息（包含文件引用）
+    // 构建完整的用户消息（包含上下文引用）
     let fullMessage = userMessage;
 
     if (fileReferences.length > 0) {
-      const referencesInfo = fileReferences.map(ref => {
-        const parts = [
-          `${ref.type === 'directory' ? '📁' : '📄'} ${ref.name}`,
-          `路径: ${ref.path}`
-        ];
+      const parts: string[] = [];
 
-        if (ref.type === 'file') {
-          if (ref.size) parts.push(`大小: ${formatFileSize(ref.size)}`);
-          if (ref.ext) parts.push(`扩展名: ${ref.ext}`);
+      for (const ref of fileReferences) {
+        if (ref.source === 'nas') {
+          const lines = [
+            `${ref.type === 'directory' ? '📁' : '📄'} ${ref.name}`,
+            `路径: ${ref.path}`,
+          ];
+          if (ref.type === 'file') {
+            if (ref.size) lines.push(`大小: ${formatFileSize(ref.size)}`);
+            if (ref.ext) lines.push(`扩展名: ${ref.ext}`);
+          }
+          parts.push(lines.join('\n'));
+        } else if (ref.source === 'email') {
+          // 按需获取邮件完整内容
+          try {
+            const url = `/api/emails/${ref.uid}?accountId=${encodeURIComponent(ref.accountId || '')}&mailbox=${encodeURIComponent(ref.mailbox)}`;
+            const res = await authFetch(url);
+            if (res.ok) {
+              const email = await res.json();
+              const lines = [
+                `📧 主题: ${ref.subject}`,
+                `发件人: ${ref.from}  日期: ${ref.date}`,
+                '---',
+                `正文:\n${email.text || '(无纯文本内容)'}`,
+              ];
+              // 文本类附件注入内容
+              if (email.attachments?.length) {
+                lines.push('\n附件:');
+                const TEXT_EXTS = /\.(txt|csv|md|json|xml|log|yaml|yml)$/i;
+                for (const att of email.attachments as { filename: string; contentType: string; size: number }[]) {
+                  if (TEXT_EXTS.test(att.filename) || att.contentType.startsWith('text/')) {
+                    try {
+                      const attUrl = `/api/emails/${ref.uid}/attachments/${encodeURIComponent(att.filename)}?accountId=${encodeURIComponent(ref.accountId || '')}&mailbox=${encodeURIComponent(ref.mailbox)}`;
+                      const attRes = await authFetch(attUrl);
+                      if (attRes.ok) {
+                        const text = await attRes.text();
+                        lines.push(`  📄 ${att.filename}（文本内容）:\n${text}`);
+                      }
+                    } catch { /* 跳过单个附件错误 */ }
+                  } else {
+                    lines.push(`  🖼 ${att.filename}（二进制，已跳过）`);
+                  }
+                }
+              }
+              parts.push(lines.join('\n'));
+            }
+          } catch (err) {
+            console.error('[App] Failed to fetch email for context:', err);
+            parts.push(`📧 ${ref.subject} (获取失败)`);
+          }
         }
+      }
 
-        return parts.join('\n');
-      }).join('\n\n');
-
-      fullMessage = `[引用的文件/目录]\n${referencesInfo}\n\n${userMessage}`;
+      if (parts.length > 0) {
+        fullMessage = `[上下文引用]\n${parts.join('\n\n')}\n\n---\n${userMessage}`;
+      }
     }
 
     // 使用 generateUUID() 生成唯一 ID
@@ -2314,10 +2381,10 @@ function App() {
                   ? 'border-blue-400 bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400'
                   : 'border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-700'
               }`}
-              title="运行日志"
+              title={t('log.title')}
             >
               <Terminal className="w-4 h-4" />
-              <span className="hidden md:inline">日志</span>
+              <span className="hidden md:inline">{t('log.button')}</span>
             </button>
           </div>
         </div>
@@ -2494,8 +2561,8 @@ function App() {
               </button>
             </div>
           </div>
-          {/* 新增：文件引用标签 */}
-          <FileReferenceTags
+          {/* 上下文引用标签（NAS 文件 + 邮件） */}
+          <ContextReferenceTags
             references={fileReferences}
             onRemove={removeFileReference}
             onClear={clearFileReferences}
@@ -2600,12 +2667,15 @@ function App() {
           onFileSelect={handleFileSelect}
           browserSnapshots={browserSnapshots}
           terminalOutputs={terminalOutputs}
+          searchUrlLists={searchUrlLists}
           forceMode={canvasForceMode}
           onClearForceMode={() => setCanvasForceMode(undefined)}
           homeDirectory={homeDirectory}
           officePreviewServer={config?.officePreviewServer}
           serverUrl={window.location.port === '3000' ? 'http://localhost:8118' : window.location.origin}
           onAddReference={addFileReference}
+          onAddEmailReference={addEmailReference}
+          onSendProgrammatic={sendProgrammatic}
           onWorkDirChange={updateWorkDir}
           onPermissionError={handlePermissionError}
           openFiles={openFiles}

@@ -28,6 +28,15 @@ import exploreRouter from './explore-api.js';
 import storageRouter from './storage-api.js';
 import { createCronRoutes } from './cron-routes.js';
 import type { CronService } from '../../cron/service.js';
+import {
+  getAccounts,
+  listMailboxes,
+  listEmails,
+  getEmail,
+  getAttachment,
+  markAsRead,
+  markAsUnread,
+} from '../../services/email-service.js';
 import type { TunnelManager } from '../../tunnel/index.js';
 import { createTunnelRoutes } from './tunnel-routes.js';
 import profileRoutes from './profile-routes.js';
@@ -1475,10 +1484,11 @@ export async function createHTTPServer(options: HTTPServerOptions) {
         // Test Anthropic-compatible endpoint
         const Anthropic = (await import('@anthropic-ai/sdk')).default;
 
-        // Check if it's MiniMax or GLM (need Bearer auth)
+        // Check if it's MiniMax, GLM, or Antigravity (need Bearer auth)
         const isMiniMax = testEndpoint.includes('minimaxi.com');
         const isGLM = testEndpoint.includes('bigmodel.cn');
-        const needsBearerAuth = isMiniMax || isGLM;
+        const isAntigravity = testEndpoint.includes('antigravity');
+        const needsBearerAuth = isMiniMax || isGLM || isAntigravity;
 
         const client = new Anthropic({
           apiKey: needsBearerAuth ? 'placeholder' : testApiKey,
@@ -1900,6 +1910,110 @@ export async function createHTTPServer(options: HTTPServerOptions) {
         success: false,
         error: error.message || '连接测试失败',
       });
+    }
+  });
+
+  // ========== Email Web API ==========
+
+  // GET /api/emails/accounts - 获取邮箱账户列表
+  app.get('/api/emails/accounts', (_, res) => {
+    try {
+      const accounts = getAccounts();
+      // 脱敏返回
+      res.json(accounts.map((a) => ({
+        id: a.id,
+        name: a.name,
+        email: a.email,
+        provider: a.provider,
+        isDefault: a.isDefault,
+      })));
+    } catch (error) {
+      console.error('[API] Failed to get email accounts:', error);
+      res.status(500).json({ error: 'Failed to get email accounts' });
+    }
+  });
+
+  // GET /api/emails/mailboxes - 获取邮箱文件夹列表
+  app.get('/api/emails/mailboxes', async (req, res) => {
+    try {
+      const accountId = req.query.accountId as string | undefined;
+      const mailboxes = await listMailboxes(accountId);
+      res.json(mailboxes);
+    } catch (error: any) {
+      console.error('[API] Failed to get mailboxes:', error);
+      res.status(500).json({ error: error.message || 'Failed to get mailboxes' });
+    }
+  });
+
+  // POST /api/emails/list - 获取邮件列表
+  app.post('/api/emails/list', async (req, res) => {
+    try {
+      const { accountId, mailbox, limit, offset } = req.body;
+      const emails = await listEmails(accountId, mailbox, limit || 50, offset || 0);
+      res.json(emails);
+    } catch (error: any) {
+      console.error('[API] Failed to get emails:', error);
+      res.status(500).json({ error: error.message || 'Failed to get emails' });
+    }
+  });
+
+  // GET /api/emails/:uid - 获取邮件详情
+  app.get('/api/emails/:uid', async (req, res) => {
+    try {
+      const uid = parseInt(req.params.uid, 10);
+      const accountId = req.query.accountId as string | undefined;
+      const mailbox = (req.query.mailbox as string) || 'INBOX';
+      const email = await getEmail(accountId, uid, mailbox);
+      res.json(email);
+    } catch (error: any) {
+      console.error('[API] Failed to get email:', error);
+      res.status(500).json({ error: error.message || 'Failed to get email' });
+    }
+  });
+
+  // GET /api/emails/:uid/attachments/:filename - 下载附件
+  app.get('/api/emails/:uid/attachments/:filename', async (req, res) => {
+    try {
+      const uid = parseInt(req.params.uid, 10);
+      const filename = req.params.filename;
+      const accountId = req.query.accountId as string | undefined;
+      const mailbox = (req.query.mailbox as string) || 'INBOX';
+      const attachment = await getAttachment(accountId, uid, filename, mailbox);
+
+      res.setHeader('Content-Type', attachment.contentType);
+      res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(attachment.filename)}"`);
+      res.send(attachment.content);
+    } catch (error: any) {
+      console.error('[API] Failed to get attachment:', error);
+      res.status(500).json({ error: error.message || 'Failed to get attachment' });
+    }
+  });
+
+  // PUT /api/emails/:uid/read - 标记为已读
+  app.put('/api/emails/:uid/read', async (req, res) => {
+    try {
+      const uid = parseInt(req.params.uid, 10);
+      const accountId = req.body.accountId as string | undefined;
+      const mailbox = req.body.mailbox || 'INBOX';
+      await markAsRead(accountId, uid, mailbox);
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error('[API] Failed to mark as read:', error);
+      res.status(500).json({ error: error.message || 'Failed to mark as read' });
+    }
+  });
+
+  // PUT /api/emails/:uid/unread - 标记为未读
+  app.put('/api/emails/:uid/unread', async (req, res) => {
+    try {
+      const uid = parseInt(req.params.uid, 10);
+      const accountId = req.body.accountId as string | undefined;
+      const mailbox = req.body.mailbox || 'INBOX';
+      await markAsUnread(accountId, uid, mailbox);
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error('[API] Failed to mark as unread:', error);
+      res.status(500).json({ error: error.message || 'Failed to mark as unread' });
     }
   });
 
