@@ -4,7 +4,7 @@ import { createServer } from 'http';
 import { v4 as uuidv4 } from 'uuid';
 import type { IChannel, FileAttachment } from '../channel.interface.js';
 import { createHTTPServer } from './http-server.js';
-import { createWSServer, broadcastToClients, broadcastToClientsWithAttachments } from './ws-server.js';
+import { createWSServer, broadcastToClients, broadcastToClientsWithAttachments, closeWSServer } from './ws-server.js';
 import type { SessionManager } from '../../session/manager.js';
 import type { ToolRegistry } from '../../agents/tools/registry.js';
 import { getConfig } from '../../config/loader.js';
@@ -155,8 +155,16 @@ export class HTTPWSChannel implements IChannel {
   }
 
   async stop(): Promise<void> {
+    // 先关闭 WebSocket 服务器
+    await closeWSServer();
+
+    // 再关闭 HTTP 服务器
     return new Promise((resolve) => {
       if (this.server) {
+        // 强制关闭所有现有连接（Node.js 18.2.0+）
+        if (typeof this.server.closeAllConnections === 'function') {
+          this.server.closeAllConnections();
+        }
         this.server.close(() => {
           console.log('[HTTPWSChannel] Stopped');
           resolve();

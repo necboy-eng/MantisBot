@@ -219,3 +219,44 @@ export function broadcastToClientsWithAttachments(
 
   console.log(`[WSServer] Broadcast chat-response to ${sentCount} clients for session ${sessionId}`);
 }
+
+/**
+ * 关闭 WebSocket 服务器
+ * 先关闭所有客户端连接，再关闭服务器
+ */
+export function closeWSServer(): Promise<void> {
+  return new Promise((resolve) => {
+    if (!wssInstance) {
+      resolve();
+      return;
+    }
+
+    console.log(`[WSServer] Closing ${wssInstance.clients.size} client connections...`);
+
+    // 关闭所有客户端连接
+    wssInstance.clients.forEach((client) => {
+      if (client.readyState === WebSocket.OPEN) {
+        client.close(1001, 'Server shutting down');
+      }
+    });
+
+    // 清理所有心跳定时器
+    clientInfoMap.forEach((info) => {
+      if (info.pingInterval) {
+        clearInterval(info.pingInterval);
+      }
+    });
+    clientInfoMap.clear();
+
+    // 关闭 WebSocket 服务器
+    wssInstance.close((err) => {
+      if (err) {
+        console.error('[WSServer] Error closing WebSocket server:', err);
+      } else {
+        console.log('[WSServer] WebSocket server closed');
+      }
+      wssInstance = null;
+      resolve();
+    });
+  });
+}
