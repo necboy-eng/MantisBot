@@ -37,7 +37,7 @@ interface EmailMessage {
   attachments?: Attachment[];
 }
 
-export function EmailPanel({ onAddEmailReference, onSendProgrammatic }: {
+export function EmailPanel({ onAddEmailReference, onSendProgrammatic: _onSendProgrammatic }: {
   onAddEmailReference?: (ref: EmailReference) => void;
   onSendProgrammatic?: (message: string) => void;
 }) {
