@@ -38,6 +38,8 @@ import { RetryManager } from './reliability/retry-manager.js';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { installLogInterceptor } from './utils/log-interceptor.js';
+import { getHooksLoader } from './hooks/loader.js';
+import { registerSelfImprovingHooks, ensureLearningsDir } from './hooks/self-improving.js';
 
 export async function main(): Promise<void> {
   console.log('[MantisBot] Starting...');
@@ -94,7 +96,10 @@ export async function main(): Promise<void> {
   const workspace = config.workspace || './data';
   const maxMessages = config.session?.maxMessages ?? 100;
   const sessionManager = new SessionManager(maxMessages, workspace);
-  const toolRegistry = new ToolRegistry(config.plugins.map(p => p.name));
+  const toolRegistry = new ToolRegistry({
+    enabledPlugins: config.plugins.map(p => p.name),
+    firecrawlApiKey: config.firecrawlApiKey
+  });
   const memoryManager = new MemoryManager(workspace);
 
   // Initialize Storage Manager
@@ -162,6 +167,14 @@ export async function main(): Promise<void> {
 
   // Set skills loader for read_skill tool
   setSkillsLoader(skillsLoader);
+
+  // Initialize self-improving hooks (错误检测 & 学习提醒)
+  await ensureLearningsDir();
+  const hooksLoader = getHooksLoader();
+  registerSelfImprovingHooks((event, handler) => {
+    hooksLoader.register(event, handler);
+  });
+  console.log('[MantisBot] Self-improving hooks registered');
 
   // Create UnifiedAgentRunner (shared by AutoReply and CronExecutor)
   // 使用统一入口，根据模型类型自动选择 ClaudeAgentRunner 或 OpenAICompatRunner

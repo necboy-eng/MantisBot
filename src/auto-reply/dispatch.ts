@@ -9,6 +9,7 @@ import { truncateHistory } from '../utils/token-counter.js';
 import { getConfig } from '../config/loader.js';
 import { detectTeamFromMessage, findTeamByCommand } from '../agents/agent-teams.js';
 import type { AgentTeam } from '../config/schema.js';
+import { getHooksLoader } from '../hooks/loader.js';
 
 export interface DispatchResult {
   response: string;
@@ -161,6 +162,19 @@ ${content}
 
       // Run agent
       const result = await this.agentRunner.run(prompt, history);
+
+      // Trigger agent.end hook for self-improving
+      try {
+        await getHooksLoader().emit('agent.end', {
+          success: result.success,
+          response: result.response,
+          toolCalls: result.toolCalls,
+          sessionId,
+          userId,
+        });
+      } catch (hookError) {
+        console.warn('[Dispatch] Hook error (non-blocking):', hookError);
+      }
 
       // Add messages to session
       this.sessionManager.addMessage(sessionId, {

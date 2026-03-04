@@ -4,6 +4,7 @@ import type { LLMMessage, FileAttachment } from '../types.js';
 import { ToolRegistry } from './tools/registry.js';
 import { getLLMClient } from './llm-client.js';
 import type { GlobalErrorHandler } from '../reliability/global-error-handler.js';
+import { getHooksLoader } from '../hooks/loader.js';
 
 export interface AgentOptions {
   model?: string;                      // 指定模型（可选）
@@ -199,6 +200,15 @@ export class AgentRunner {
             result,
           });
 
+          // 触发 tool.called hook（成功）
+          try {
+            getHooksLoader().emit('tool.called', {
+              tool: toolCall.name,
+              result,
+              isError: false,
+            });
+          } catch { /* hook 错误不阻塞主流程 */ }
+
           // 收集附件
           collectAttachments(result, attachments);
 
@@ -234,14 +244,24 @@ export class AgentRunner {
           console.error(`  Error:`, error);
           console.error(`${'='.repeat(80)}\n`);
 
+          // 触发 tool.called hook（失败）
+          const errorMessage = String(error);
+          try {
+            getHooksLoader().emit('tool.called', {
+              tool: toolCall.name,
+              result: { error: errorMessage },
+              isError: true,
+            });
+          } catch { /* hook 错误不阻塞主流程 */ }
+
           // 使用GlobalErrorHandler处理错误（简化版本）
-          let errorMessage = String(error);
+          let finalErrorMessage = errorMessage;
           if (this.errorHandler) {
             try {
               // 简化错误处理：只记录错误，不执行复杂逻辑
               console.log(`[AgentRunner] Error handler processing tool error: ${toolCall.name}`);
               // 可以在这里添加错误分类和记录逻辑
-              errorMessage = `Tool execution failed: ${errorMessage}`;
+              finalErrorMessage = `Tool execution failed: ${errorMessage}`;
             } catch (handlerError) {
               console.error('[AgentRunner] Error handler failed:', handlerError);
             }
@@ -254,7 +274,7 @@ export class AgentRunner {
           messages.push({
             role: 'tool',
             toolCallId: toolCall.id,
-            content: `Error: ${errorMessage}`,
+            content: `Error: ${finalErrorMessage}`,
           });
         }
       }

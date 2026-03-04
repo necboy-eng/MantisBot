@@ -6,6 +6,7 @@ import { registerClearCommand } from './commands/clear.js';
 import { registerStatusCommand } from './commands/status.js';
 import { registerWhoamiCommand } from './commands/whoami.js';
 import { registerModelCommand } from './commands/model.js';
+import { registerLearningCommand } from './commands/learning.js';
 import { ChannelMessage, ChannelContext } from '../channels/channel.interface.js';
 import type { IAgentRunner } from '../agents/unified-runner.js';
 import { UnifiedAgentRunner } from '../agents/unified-runner.js';
@@ -36,6 +37,7 @@ export class AutoReply {
     registerStatusCommand(this.commandRegistry, sessionManager);
     registerWhoamiCommand(this.commandRegistry);
     registerModelCommand(this.commandRegistry);
+    registerLearningCommand(this.commandRegistry);
   }
 
   /**

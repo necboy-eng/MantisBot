@@ -7,6 +7,7 @@ import { getLLMClient } from './llm-client.js';
 import { ToolRegistry } from './tools/registry.js';
 import { getConfig } from '../config/loader.js';
 import { workDirManager } from '../workdir/manager.js';
+import { getHooksLoader } from '../hooks/loader.js';
 import type { LLMMessage, FileAttachment, ToolInfo } from '../types.js';
 import {
   type StreamChunk,
@@ -422,6 +423,15 @@ export class OpenAICompatRunner extends EventEmitter {
 
           toolCallsExecuted.push({ tool: tc.name, result });
 
+          // 触发 tool.called hook（成功）
+          try {
+            getHooksLoader().emit('tool.called', {
+              tool: tc.name,
+              result,
+              isError: false,
+            });
+          } catch { /* hook 错误不阻塞主流程 */ }
+
           // 构建工具结果
           const resultForLLM = (result && typeof result === 'object' && 'message' in result)
             ? { message: (result as Record<string, unknown>).message }
@@ -451,6 +461,15 @@ export class OpenAICompatRunner extends EventEmitter {
           console.error(`  Duration: ${duration}ms`);
           console.error(`  Error:`, errorMessage);
           console.error(`${'='.repeat(80)}\n`);
+
+          // 触发 tool.called hook（失败）
+          try {
+            getHooksLoader().emit('tool.called', {
+              tool: tc.name,
+              result: { error: errorMessage },
+              isError: true,
+            });
+          } catch { /* hook 错误不阻塞主流程 */ }
 
           messages.push({
             role: 'assistant',

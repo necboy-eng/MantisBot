@@ -55,6 +55,7 @@ import { registerMemoryCommand } from '../../auto-reply/commands/memory.js';
 import { registerStatusCommand } from '../../auto-reply/commands/status.js';
 import { registerWhoamiCommand } from '../../auto-reply/commands/whoami.js';
 import { registerModelCommand } from '../../auto-reply/commands/model.js';
+import { registerLearningCommand } from '../../auto-reply/commands/learning.js';
 import { workDirManager } from '../../workdir/manager.js';
 import { PluginLoader } from '../../plugins/loader.js';
 import { createPluginRoutes } from './plugin-routes.js';
@@ -154,6 +155,7 @@ export async function createHTTPServer(options: HTTPServerOptions) {
   registerWhoamiCommand(commandRegistry);
   registerModelCommand(commandRegistry);
   registerMemoryCommand(commandRegistry);
+  registerLearningCommand(commandRegistry);
 
   // Plugin routes (if pluginLoader is provided)
   if (options.pluginLoader) {
@@ -1226,10 +1228,20 @@ export async function createHTTPServer(options: HTTPServerOptions) {
     }
   });
 
-  // Commands API - 获取所有 plugin commands
+  // Commands API - 获取所有可用命令
   app.get('/api/commands', (_, res) => {
     try {
       const commands: Array<{ name: string; description: string; plugin: string }> = [];
+
+      // 从 CommandRegistry 获取内置命令
+      const systemCommands = commandRegistry.list();
+      for (const cmd of systemCommands) {
+        commands.push({
+          name: cmd.name,
+          description: cmd.description,
+          plugin: 'system'
+        });
+      }
 
       // 如果有 pluginLoader，获取 plugin commands
       if (options.pluginLoader) {
@@ -1242,16 +1254,6 @@ export async function createHTTPServer(options: HTTPServerOptions) {
           });
         }
       }
-
-      // 添加内置 commands
-      commands.push(
-        { name: 'help', description: '显示帮助信息', plugin: 'system' },
-        { name: 'clear', description: '清空当前会话消息', plugin: 'system' },
-        { name: 'status', description: '显示当前状态', plugin: 'system' },
-        { name: 'whoami', description: '显示当前用户信息', plugin: 'system' },
-        { name: 'model', description: '查看或切换模型', plugin: 'system' },
-        { name: 'memory', description: '强制保存内容到长期记忆，用法：/memory <内容>', plugin: 'system' }
-      );
 
       res.json({ commands });
     } catch (error) {
