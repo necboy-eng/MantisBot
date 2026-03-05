@@ -292,6 +292,9 @@ function App() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const [autoScroll, setAutoScroll] = useState(true);
 
+  // textarea 引用(用于自动调整高度)
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
   // 停止对话相关
   const abortControllerRef = useRef<AbortController | null>(null);
 
@@ -764,12 +767,29 @@ function App() {
     });
   }
 
-  // 监听输入框，当用户输入 / 时自动打开命令面板
-  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // 键盘事件处理: Enter 发送,Shift+Enter 换行
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      const form = e.currentTarget.form;
+      if (form && input.trim()) {
+        form.requestSubmit();
+      }
+    }
+  };
+
+  // 监听输入框,当用户输入 / 时自动打开命令面板,同时自动调整高度
+  const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const value = e.target.value;
     setInput(value);
 
-    // 如果用户输入 / 且不在命令面板中，打开命令面板
+    // 使用固定高度(避免抖动)
+    // 每行约 24px,最多显示 3 行
+    if (textareaRef.current) {
+      textareaRef.current.style.height = '72px'; // 固定 3 行高度
+    }
+
+    // 如果用户输入 / 且不在命令面板中,打开命令面板
     if (value === '/' && !commandPaletteOpen) {
       setCommandPaletteOpen(true);
     }
@@ -1959,9 +1979,9 @@ function App() {
 
       // 显示用户友好的错误提示
       if (window.confirm(`${errorMessage}\n\n是否重试？`)) {
-        // 用户选择重试，重新发送消息
+        // 用户选择重试,重新发送消息
         setTimeout(() => {
-          const inputEl = document.querySelector('input[type="text"]') as HTMLInputElement;
+          const inputEl = document.querySelector('textarea') as HTMLTextAreaElement;
           if (inputEl) {
             inputEl.value = userMessage;
             setInput(userMessage);
@@ -2514,53 +2534,6 @@ function App() {
 
         {/* Input */}
         <div className="p-2 md:p-4 border-t border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900">
-          {/* 审批模式 + 工作目录选择器 */}
-          <div className="flex items-center gap-2 mb-2">
-            {/* 审批模式选择器 */}
-            <select
-              value={approvalMode}
-              onChange={async (e) => {
-                const newMode = e.target.value as ApprovalMode;
-                setApprovalMode(newMode);
-                // 如果有当前会话，更新会话的审批模式
-                if (currentSession) {
-                  try {
-                    await authFetch(`/api/sessions/${currentSession}`, {
-                      method: 'PUT',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ approvalMode: newMode })
-                    });
-                    console.log('Updated approval mode to:', newMode);
-                  } catch (err) {
-                    console.error('Failed to update approval mode:', err);
-                  }
-                }
-              }}
-              className="px-3 py-1.5 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-sm"
-              title={t('approval.title')}
-            >
-              <option value="auto">{t('approval.auto')}</option>
-              <option value="dangerous">{t('approval.dangerous')}</option>
-              <option value="ask">{t('approval.ask')}</option>
-            </select>
-            {/* 工作目录 */}
-            <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-100 dark:bg-gray-800 rounded-lg text-sm">
-              <FolderOpen className="w-4 h-4 text-primary-600 dark:text-primary-400" />
-              <span className="text-gray-600 dark:text-gray-400">{t('app.workDir')}:</span>
-              <button
-                onClick={() => {
-                  const newDir = prompt(t('app.enterWorkDir'), currentWorkDir);
-                  if (newDir && newDir !== currentWorkDir) {
-                    updateWorkDir(newDir);
-                  }
-                }}
-                className="text-primary-600 dark:text-primary-400 hover:underline font-mono text-xs truncate max-w-[120px] md:max-w-md"
-                title={t('app.clickToChange')}
-              >
-                {currentWorkDir}
-              </button>
-            </div>
-          </div>
           {/* 上下文引用标签（NAS 文件 + 邮件） */}
           <ContextReferenceTags
             references={fileReferences}
@@ -2578,80 +2551,138 @@ function App() {
             </div>
           )}
 
-          {/* Agent Teams Selector */}
-          {agentTeams.length > 0 && (
-            <div className="mb-2 flex items-center gap-2 flex-wrap">
-              <span className="text-xs text-gray-500 dark:text-gray-400 shrink-0">Agent Team:</span>
-              <div className="flex items-center gap-1.5 flex-wrap">
-                <button
-                  type="button"
-                  onClick={() => setSelectedTeamId('')}
-                  className={`px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${
-                    selectedTeamId === ''
-                      ? 'bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200'
-                      : 'bg-transparent text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800'
-                  }`}
-                >
-                  默认
-                </button>
-                {agentTeams.map(team => (
-                  <button
-                    key={team.id}
-                    type="button"
-                    onClick={() => setSelectedTeamId(team.id === selectedTeamId ? '' : team.id)}
-                    title={team.description || team.name}
-                    className={`px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${
-                      selectedTeamId === team.id
-                        ? 'bg-primary-100 dark:bg-primary-900/40 text-primary-700 dark:text-primary-300 ring-1 ring-primary-400'
-                        : 'bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700'
-                    }`}
-                  >
-                    {team.triggerCommand ? `/${team.triggerCommand} ` : ''}
-                    {team.name}
-                  </button>
-                ))}
-              </div>
-              {/* 非 Anthropic 模型警告 */}
-              {selectedTeamId && (() => {
-                const model = config?.models?.find(m => m.name === selectedModel);
-                const isAnthropic = model?.protocol === 'anthropic';
-                return !isAnthropic ? (
-                  <span className="text-xs text-amber-600 dark:text-amber-400 flex items-center gap-1">
-                    ⚠ Agent Teams 仅支持 Anthropic (Claude) 模型
-                  </span>
-                ) : null;
-              })()}
-            </div>
-          )}
+          <form onSubmit={sendMessage} data-chat-form>
+            {/* 卡片式输入容器 */}
+            <div className="rounded-2xl border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 focus-within:border-primary-500 dark:focus-within:border-primary-400 focus-within:ring-2 focus-within:ring-primary-500/20 transition-all duration-150 overflow-hidden">
+              {/* 上行：textarea */}
+              <textarea
+                value={input}
+                onChange={handleInputChange}
+                onKeyDown={handleKeyDown}
+                placeholder={t('app.inputPlaceholder')}
+                className="w-full px-4 pt-3 pb-2 bg-transparent border-none outline-none resize-none overflow-y-auto text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 text-sm leading-relaxed"
+                disabled={loading}
+                rows={1}
+                ref={textareaRef}
+              />
 
-          <form onSubmit={sendMessage} data-chat-form className="flex gap-2">
-            <input
-              type="text"
-              value={input}
-              onChange={handleInputChange}
-              placeholder={t('app.inputPlaceholder')}
-              className="flex-1 px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-primary-500"
-              disabled={loading}
-            />
-            {loading ? (
-              <button
-                type="button"
-                onClick={stopChat}
-                className="px-6 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors flex items-center gap-2"
-                title={t('app.stop') + ' (Esc)'}
-              >
-                <Square className="w-4 h-4" />
-                {t('app.stop')}
-              </button>
-            ) : (
-              <button
-                type="submit"
-                disabled={!input.trim()}
-                className="px-6 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-              >
-                {t('app.send')}
-              </button>
-            )}
+              {/* 分隔线 */}
+              <div className="mx-3 border-t border-gray-200 dark:border-gray-700" />
+
+              {/* 下行：工具栏 */}
+              <div className="flex items-center justify-between px-3 py-2 gap-2">
+                {/* 左侧：审批模式 + 工作目录 + Agent Teams */}
+                <div className="flex items-center gap-2 min-w-0">
+                  {/* 审批模式 */}
+                  <select
+                    value={approvalMode}
+                    onChange={async (e) => {
+                      const newMode = e.target.value as ApprovalMode;
+                      setApprovalMode(newMode);
+                      if (currentSession) {
+                        try {
+                          await authFetch(`/api/sessions/${currentSession}`, {
+                            method: 'PUT',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ approvalMode: newMode })
+                          });
+                        } catch (err) {
+                          console.error('Failed to update approval mode:', err);
+                        }
+                      }
+                    }}
+                    className="text-xs px-2 py-1 rounded-md border border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-700 text-gray-600 dark:text-gray-300 focus:outline-none focus:ring-1 focus:ring-primary-500 cursor-pointer shrink-0"
+                    title={t('approval.title')}
+                  >
+                    <option value="auto">{t('approval.auto')}</option>
+                    <option value="dangerous">{t('approval.dangerous')}</option>
+                    <option value="ask">{t('approval.ask')}</option>
+                  </select>
+
+                  {/* 工作目录 */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const newDir = prompt(t('app.enterWorkDir'), currentWorkDir);
+                      if (newDir && newDir !== currentWorkDir) {
+                        updateWorkDir(newDir);
+                      }
+                    }}
+                    className="flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400 hover:text-primary-600 dark:hover:text-primary-400 transition-colors min-w-0"
+                    title={t('app.clickToChange')}
+                  >
+                    <FolderOpen className="w-3.5 h-3.5 shrink-0" />
+                    <span className="font-mono truncate max-w-[80px] md:max-w-[160px]">{currentWorkDir}</span>
+                  </button>
+
+                  {/* Agent Teams */}
+                  {agentTeams.length > 0 && (
+                    <select
+                      value={selectedTeamId}
+                      onChange={(e) => setSelectedTeamId(e.target.value)}
+                      className="text-xs px-2 py-1 rounded-md border border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-700 text-gray-600 dark:text-gray-300 focus:outline-none focus:ring-1 focus:ring-primary-500 cursor-pointer shrink-0"
+                      disabled={loading}
+                    >
+                      <option value="">默认</option>
+                      {agentTeams.map(team => (
+                        <option key={team.id} value={team.id}>
+                          {team.name}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+
+                {/* 右侧：📎 占位 + 发送/停止按钮 */}
+                <div className="flex items-center gap-1.5">
+                  {/* 附件占位按钮 */}
+                  <button
+                    type="button"
+                    disabled
+                    className="p-1.5 rounded-lg text-gray-300 dark:text-gray-600 cursor-not-allowed"
+                    title="附件（暂不支持）"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.586-6.586a4 4 0 00-5.656-5.656L5.757 10.757a6 6 0 108.486 8.486L20 13" />
+                    </svg>
+                  </button>
+
+                  {/* 斜杠命令提示按钮 */}
+                  <button
+                    type="button"
+                    onClick={() => { setInput('/'); setCommandPaletteOpen(true); }}
+                    disabled={loading}
+                    className="p-1.5 rounded-lg text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                    title="斜杠命令"
+                  >
+                    <span className="text-sm font-mono leading-none">/</span>
+                  </button>
+
+                  {/* 停止 / 发送按钮 */}
+                  {loading ? (
+                    <button
+                      type="button"
+                      onClick={stopChat}
+                      className="p-1.5 rounded-lg bg-red-500 hover:bg-red-600 text-white transition-colors"
+                      title={t('app.stop') + ' (Esc)'}
+                    >
+                      <Square className="w-4 h-4" />
+                    </button>
+                  ) : (
+                    <button
+                      type="submit"
+                      disabled={!input.trim()}
+                      className="p-1.5 rounded-lg bg-primary-600 hover:bg-primary-700 disabled:bg-gray-200 dark:disabled:bg-gray-700 text-white disabled:text-gray-400 dark:disabled:text-gray-500 transition-colors disabled:cursor-not-allowed"
+                      title={t('app.send')}
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2.5} viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 10.5L12 3m0 0l7.5 7.5M12 3v18" />
+                      </svg>
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
           </form>
         </div>
         </main>
@@ -2753,7 +2784,7 @@ function App() {
           onSelect={(command) => {
             setInput(command);
             // 聚焦到输入框
-            const inputEl = document.querySelector('input[type="text"]') as HTMLInputElement;
+            const inputEl = document.querySelector('textarea') as HTMLTextAreaElement;
             inputEl?.focus();
           }}
           onClose={() => setCommandPaletteOpen(false)}

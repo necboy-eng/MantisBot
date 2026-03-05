@@ -505,6 +505,15 @@ export async function createHTTPServer(options: HTTPServerOptions) {
       // ─────────────────────────────────────────────────────────────
 
       // Validate API key for the selected model — fail fast before any LLM call
+      // 校验 session.model 是否在配置中存在（防止旧数据里存了 'default' 等无效值）
+      const isValidSessionModel = session.model
+        ? (config.models as any[]).some((m: any) => m.name === session.model)
+        : false;
+      if (!isValidSessionModel && session.model) {
+        console.warn(`[HTTPServer] session.model '${session.model}' not found in config, falling back to default`);
+        session.model = config.defaultModel || config.models[0]?.name;
+        options.sessionManager.updateSession(session);
+      }
       const resolvedModelName = session.model || config.defaultModel || config.models[0]?.name;
       const resolvedModelConfig = (config.models as any[]).find((m: any) => m.name === resolvedModelName);
       if (resolvedModelConfig && !resolvedModelConfig.apiKey?.trim()) {
