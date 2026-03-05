@@ -36,6 +36,7 @@
   ],
   "workspace": "./data",
   "allowedPaths": [],
+  "officePreviewServer": "http://localhost:8081",
   "enabledSkills": [
     "pptx",
     "xlsx",
