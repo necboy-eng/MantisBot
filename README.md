@@ -353,6 +353,8 @@ docker-compose up -d
 docker-compose logs -f
 ```
 
+- Build & Release Guide (Make + Docker Compose): [BUILD_AND_RELEASE_GUIDE.md](./BUILD_AND_RELEASE_GUIDE.md)
+
 ### 🤝 Contributing
 
 Contributions are welcome! Please feel free to submit issues, fork the repository, and create pull requests.
@@ -740,6 +742,8 @@ docker-compose up -d
 # 查看日志
 docker-compose logs -f
 ```
+
+- 构建与发布指南（Make + Docker Compose）：[BUILD_AND_RELEASE_GUIDE.md](./BUILD_AND_RELEASE_GUIDE.md)
 
 ### 🤝 贡献
 
