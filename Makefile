@@ -10,7 +10,7 @@
 
 # 配置变量（可通过环境变量覆盖）
 REGISTRY ?= docker.io
-IMAGE_PREFIX ?= $(USER)
+IMAGE_PREFIX ?= mantis
 VERSION ?= $(shell node -p "require('./package.json').version")
 BUILD_DATE ?= $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
 GIT_COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
@@ -22,7 +22,7 @@ WEBUI_IMAGE := $(REGISTRY)/$(IMAGE_PREFIX)/mantis-bot-webui
 # 平台支持
 PLATFORMS ?= linux/arm64,linux/amd64
 
-.PHONY: help build build-backend build-webui push push-backend push-webui release release-backend release-webui run stop clean tag-latest
+.PHONY: help build build-backend build-webui push push-backend push-webui release release-backend release-webui run stop clean tag-latest bump-version bump-minor bump-major
 
 help: ## 显示帮助信息
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -111,10 +111,53 @@ tag-latest: ## 为当前版本打 latest 标签
 # 发布流程
 # ============================================
 
-release: buildx ## 完整发布流程（多平台构建并推送全部镜像）
+release: bump-version buildx ## 完整发布流程，递增 patch 版本（1.0.0 → 1.0.1）
 	@echo "🚀 发布完成!"
 	@echo "   后端镜像: $(BACKEND_IMAGE):$(VERSION)"
 	@echo "   Web UI: $(WEBUI_IMAGE):$(VERSION)"
+
+release-minor: bump-minor buildx ## 发布 minor 版本（1.0.x → 1.1.0）
+	@echo "🚀 发布完成!"
+	@echo "   后端镜像: $(BACKEND_IMAGE):$(VERSION)"
+	@echo "   Web UI: $(WEBUI_IMAGE):$(VERSION)"
+
+release-major: bump-major buildx ## 发布 major 版本（1.x.x → 2.0.0）
+	@echo "🚀 发布完成!"
+	@echo "   后端镜像: $(BACKEND_IMAGE):$(VERSION)"
+	@echo "   Web UI: $(WEBUI_IMAGE):$(VERSION)"
+
+bump-version: ## 递增 patch 版本号（1.0.0 → 1.0.1）
+	@node -e "\
+	  const fs = require('fs'); \
+	  const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8')); \
+	  const parts = pkg.version.split('.').map(Number); \
+	  parts[2]++; \
+	  pkg.version = parts.join('.'); \
+	  fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n'); \
+	  console.log('📦 版本号更新为: ' + pkg.version); \
+	"
+
+bump-minor: ## 递增 minor 版本号（1.0.x → 1.1.0）
+	@node -e "\
+	  const fs = require('fs'); \
+	  const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8')); \
+	  const parts = pkg.version.split('.').map(Number); \
+	  parts[1]++; parts[2] = 0; \
+	  pkg.version = parts.join('.'); \
+	  fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n'); \
+	  console.log('📦 版本号更新为: ' + pkg.version); \
+	"
+
+bump-major: ## 递增 major 版本号（x.0.0 → 2.0.0）
+	@node -e "\
+	  const fs = require('fs'); \
+	  const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8')); \
+	  const parts = pkg.version.split('.').map(Number); \
+	  parts[0]++; parts[1] = 0; parts[2] = 0; \
+	  pkg.version = parts.join('.'); \
+	  fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n'); \
+	  console.log('📦 版本号更新为: ' + pkg.version); \
+	"
 
 release-backend: buildx-backend ## 仅构建并推送后端镜像
 	@echo "🚀 后端发布完成: $(BACKEND_IMAGE):$(VERSION)"

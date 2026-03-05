@@ -2055,7 +2055,12 @@ function App() {
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2 text-primary-600">
               <img src="/logo.png" alt="Logo" className="w-8 h-8 object-contain" />
-              <span className="text-xl font-bold">{t('app.title')}</span>
+              <div className="relative">
+                <span className="text-xl font-bold">{t('app.title')}</span>
+                <span className="absolute -top-2 -right-0 translate-x-full text-[9px] font-mono font-semibold leading-none bg-primary-100 dark:bg-primary-900/60 text-primary-600 dark:text-primary-400 px-1 py-0.5 rounded-full border border-primary-200 dark:border-primary-700 select-none whitespace-nowrap">
+                  v{__APP_VERSION__}
+                </span>
+              </div>
             </div>
             {/* Backend health status dot */}
             <button

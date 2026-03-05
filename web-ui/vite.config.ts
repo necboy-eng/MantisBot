@@ -1,5 +1,10 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import { readFileSync } from 'fs';
+import { resolve } from 'path';
+
+const rootPkg = JSON.parse(readFileSync(resolve(__dirname, '../package.json'), 'utf-8'));
+const APP_VERSION: string = rootPkg.version || '0.0.0';
 
 // Vite 在 configure 之后才注册自己的 proxy.on('error', ...) 处理器
 // 所以无法用 removeAllListeners 提前移除——需要在 configure 中替换 proxy.on，
@@ -23,6 +28,9 @@ function suppressECONNREFUSED() {
 
 export default defineConfig({
   plugins: [react()],
+  define: {
+    __APP_VERSION__: JSON.stringify(APP_VERSION),
+  },
   server: {
     port: 3000,
     proxy: {
