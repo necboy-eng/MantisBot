@@ -89,8 +89,9 @@ export function buildIsolatedEnv(overrideConfig?: {
       env.ANTHROPIC_BASE_URL = baseUrl;
     }
 
-    // Model
-    const model = overrideConfig?.model || config.defaultModel || defaultModel?.name;
+    // Model：优先用 overrideConfig 传入的值（应为真实 API 模型 ID，如 "glm-5"）
+    // 回退时用 defaultModel.model（真实 ID），而非 .name（显示名，如 "GLM-5-Aliyun"）
+    const model = overrideConfig?.model || defaultModel?.model || config.defaultModel || defaultModel?.name;
     if (model) {
       env.ANTHROPIC_MODEL = model;
     }

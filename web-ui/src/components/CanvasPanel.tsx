@@ -65,6 +65,12 @@ interface CanvasPanelProps {
   openFiles?: FileItem[];
   onOpenFilesChange?: (files: FileItem[]) => void;
   onCurrentFileChange?: (file: FileItem | null) => void;
+  // 邮件未读数（用于 Tab badge）
+  emailUnreadCount?: number;
+  onEmailTabOpen?: () => void;
+  // 后端推送的新邮件摘要（轮询发现新邮件时传入）
+  incomingEmails?: any[];
+  onIncomingEmailsConsumed?: () => void;
 }
 
 export function CanvasPanel({
@@ -87,7 +93,11 @@ export function CanvasPanel({
   onPermissionError,
   openFiles = [],
   onOpenFilesChange,
-  onCurrentFileChange
+  onCurrentFileChange,
+  emailUnreadCount = 0,
+  onEmailTabOpen,
+  incomingEmails,
+  onIncomingEmailsConsumed,
 }: CanvasPanelProps) {
   const { t } = useTranslation();
 
@@ -346,8 +356,8 @@ export function CanvasPanel({
               <span className="hidden md:inline">{t('canvas.nas')}</span>
             </button>
             <button
-              onClick={() => handleModeChange('email')}
-              className={`flex items-center gap-1 px-3 py-1 text-sm rounded-md transition-colors ${
+              onClick={() => { handleModeChange('email'); onEmailTabOpen?.(); }}
+              className={`relative flex items-center gap-1 px-3 py-1 text-sm rounded-md transition-colors ${
                 mode === 'email'
                   ? 'bg-white dark:bg-gray-700 text-primary-600 dark:text-primary-400 shadow-sm'
                   : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
@@ -356,6 +366,11 @@ export function CanvasPanel({
             >
               <Mail className="w-3.5 h-3.5" />
               <span className="hidden md:inline">{t('canvas.email')}</span>
+              {emailUnreadCount > 0 && (
+                <span className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 bg-red-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center leading-none">
+                  {emailUnreadCount > 99 ? '99+' : emailUnreadCount}
+                </span>
+              )}
             </button>
           </div>
         </div>
@@ -744,6 +759,8 @@ export function CanvasPanel({
           <EmailPanel
             onAddEmailReference={onAddEmailReference}
             onSendProgrammatic={onSendProgrammatic}
+            incomingEmails={incomingEmails}
+            onIncomingEmailsConsumed={onIncomingEmailsConsumed}
           />
         ) : null}
       </div>

@@ -8,6 +8,15 @@ import { simpleParser } from 'mailparser';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
+import {
+  isCached,
+  getFromCache,
+  putToCache,
+  putBatchToCache,
+  updateCachedFlags,
+  listFromCache,
+  readIndex,
+} from './email-cache.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -127,8 +136,8 @@ function createImapConfig(account: EmailAccount): Imap.Config {
   };
 }
 
-// 连接 IMAP 服务器
-async function connect(account: EmailAccount): Promise<Imap> {
+// 连接 IMAP 服务器（导出供轮询服务复用）
+export async function connect(account: EmailAccount): Promise<Imap> {
   const config = createImapConfig(account);
 
   if (!config.user || !config.password) {
@@ -161,8 +170,8 @@ async function connect(account: EmailAccount): Promise<Imap> {
   });
 }
 
-// 打开邮箱文件夹
-function openBox(imap: Imap, mailbox: string, readOnly = false): Promise<Imap.Box> {
+// 打开邮箱文件夹（导出供轮询服务复用）
+export function openBox(imap: Imap, mailbox: string, readOnly = false): Promise<Imap.Box> {
   return new Promise((resolve, reject) => {
     imap.openBox(mailbox, readOnly, (err, box) => {
       if (err) reject(err);
@@ -294,11 +303,11 @@ function formatMailboxTree(boxes: any, prefix = ''): Mailbox[] {
   return result;
 }
 
-// 获取邮件列表
+// 获取邮件列表（带缓存，按需拉取）
 export async function listEmails(
   accountId: string | undefined,
   mailbox: string = 'INBOX',
-  limit: number = 50,
+  limit: number = 20,
   offset: number = 0
 ): Promise<EmailMessage[]> {
   const account = getAccount(accountId);
@@ -306,38 +315,45 @@ export async function listEmails(
     throw new Error('No email account available');
   }
 
+  const cacheAccountId = accountId || account.id;
+  const cacheIndex = readIndex(cacheAccountId, mailbox);
+
   const imap = await connect(account);
 
   try {
     await openBox(imap, mailbox);
 
-    // 搜索所有邮件
-    const messages = await searchMessages(imap, ['ALL'], {
-      bodies: [''],
-      markSeen: false,
-    });
+    // 1. 轻���获取全部 uid（不拉正文），用于分页计算
+    const allUids = (await searchUids(imap)).sort((a, b) => b - a); // 降序，最新在前
 
-    // 按日期排序（最新在前）
-    const sortedMessages = messages.sort((a, b) => {
-      const dateA = a.attributes?.date ? new Date(a.attributes.date).getTime() : 0;
-      const dateB = b.attributes?.date ? new Date(b.attributes.date).getTime() : 0;
-      return dateB - dateA;
-    });
+    // 2. 当前页需要的 uid 切片
+    const pageUids = allUids.slice(offset, offset + limit);
 
-    // 分页
-    const paginatedMessages = sortedMessages.slice(offset, offset + limit);
+    // 3. 只拉取当前页中缓存缺失的邮件正文
+    const cachedUidSet = new Set(cacheIndex.uids);
+    const missingUids = pageUids.filter(uid => !cachedUidSet.has(uid));
 
+    if (missingUids.length > 0) {
+      const fetchedMessages = await fetchMessagesByUids(imap, missingUids);
+      const parsedMessages: EmailMessage[] = [];
+      for (const item of fetchedMessages) {
+        const parsed = await parseEmail(item.body);
+        parsedMessages.push({
+          uid: item.attributes.uid,
+          ...parsed,
+          flags: item.attributes.flags,
+        });
+      }
+      putBatchToCache(cacheAccountId, mailbox, parsedMessages);
+    }
+
+    // 4. 从缓存读取当前页结果
     const results: EmailMessage[] = [];
-
-    for (const item of paginatedMessages) {
-      const bodyStr = item.body;
-      const parsed = await parseEmail(bodyStr);
-
-      results.push({
-        uid: item.attributes.uid,
-        ...parsed,
-        flags: item.attributes.flags,
-      });
+    for (const uid of pageUids) {
+      const cached = getFromCache(cacheAccountId, mailbox, uid);
+      if (cached) {
+        results.push(cached);
+      }
     }
 
     return results;
@@ -346,11 +362,46 @@ export async function listEmails(
   }
 }
 
-// 获取邮件详情
+// 仅搜索所有 uid（不拉取邮件正文，速度快）
+function searchUids(imap: Imap): Promise<number[]> {
+  return new Promise((resolve, reject) => {
+    imap.search(['ALL'], (err, results) => {
+      if (err) reject(err);
+      else resolve(results || []);
+    });
+  });
+}
+
+// 按 uid 列表拉取邮件（分批，避免一次请求过多）
+async function fetchMessagesByUids(imap: Imap, uids: number[]): Promise<any[]> {
+  if (uids.length === 0) return [];
+  // 分批拉取，每批最多 50 封
+  const BATCH = 50;
+  const all: any[] = [];
+  for (let i = 0; i < uids.length; i += BATCH) {
+    const batch = uids.slice(i, i + BATCH);
+    const messages = await searchMessages(imap, [['UID', batch.join(',')]], {
+      bodies: [''],
+      markSeen: false,
+    });
+    all.push(...messages);
+  }
+  return all;
+}
+
+// 获取邮件详情（带缓存）
 export async function getEmail(accountId: string | undefined, uid: number, mailbox: string = 'INBOX'): Promise<EmailMessage> {
   const account = getAccount(accountId);
   if (!account) {
     throw new Error('No email account available');
+  }
+
+  const cacheAccountId = accountId || account.id;
+
+  // 缓存命中时直接返回
+  if (isCached(cacheAccountId, mailbox, uid)) {
+    const cached = getFromCache(cacheAccountId, mailbox, uid);
+    if (cached) return cached;
   }
 
   const imap = await connect(account);
@@ -373,11 +424,16 @@ export async function getEmail(accountId: string | undefined, uid: number, mailb
     const item = messages[0];
     const parsed = await parseEmail(item.body);
 
-    return {
+    const email: EmailMessage = {
       uid: item.attributes.uid,
       ...parsed,
       flags: item.attributes.flags,
     };
+
+    // 写入缓存
+    putToCache(cacheAccountId, mailbox, email);
+
+    return email;
   } finally {
     imap.end();
   }
@@ -444,12 +500,21 @@ export async function markAsRead(accountId: string | undefined, uid: number, mai
   try {
     await openBox(imap, mailbox, false);
 
-    return new Promise((resolve, reject) => {
+    await new Promise<void>((resolve, reject) => {
       imap.addFlags([uid], '\\Seen', (err) => {
         if (err) reject(err);
         else resolve();
       });
     });
+
+    // 同步缓存 flags
+    const cacheAccountId = accountId || account.id;
+    const cached = getFromCache(cacheAccountId, mailbox, uid);
+    if (cached) {
+      const flags = [...(cached.flags || [])];
+      if (!flags.includes('\\Seen')) flags.push('\\Seen');
+      updateCachedFlags(cacheAccountId, mailbox, uid, flags);
+    }
   } finally {
     imap.end();
   }
@@ -467,12 +532,20 @@ export async function markAsUnread(accountId: string | undefined, uid: number, m
   try {
     await openBox(imap, mailbox, false);
 
-    return new Promise((resolve, reject) => {
+    await new Promise<void>((resolve, reject) => {
       imap.delFlags([uid], '\\Seen', (err) => {
         if (err) reject(err);
         else resolve();
       });
     });
+
+    // 同步缓存 flags
+    const cacheAccountId = accountId || account.id;
+    const cached = getFromCache(cacheAccountId, mailbox, uid);
+    if (cached) {
+      const flags = (cached.flags || []).filter(f => f !== '\\Seen');
+      updateCachedFlags(cacheAccountId, mailbox, uid, flags);
+    }
   } finally {
     imap.end();
   }

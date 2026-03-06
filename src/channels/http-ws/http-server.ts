@@ -42,6 +42,7 @@ import { createTunnelRoutes } from './tunnel-routes.js';
 import profileRoutes from './profile-routes.js';
 import evolutionRoutes from './evolution-routes.js';
 import { broadcastToClients } from './ws-server.js';
+import { startEmailPoller } from '../../services/email-poller.js';
 import type { SkillsLoader } from '../../agents/skills/loader.js';
 import { installSkillFromSource } from '../../agents/skills/github-installer.js';
 import { preferenceDetector } from '../../agents/preference-detector.js';
@@ -1504,6 +1505,10 @@ export async function createHTTPServer(options: HTTPServerOptions) {
         const client = new Anthropic({
           apiKey: needsBearerAuth ? 'placeholder' : testApiKey,
           baseURL: testEndpoint,
+          // 必须显式将 authToken 设为 null，否则 SDK 会自动读取
+          // ANTHROPIC_AUTH_TOKEN 环境变量（Claude Code 注入的 token）并添加
+          // Authorization: Bearer 头，导致第三方 Anthropic 兼容端点鉴权失败
+          authToken: needsBearerAuth ? testApiKey : null,
           defaultHeaders: needsBearerAuth ? {
             'Authorization': `Bearer ${testApiKey}`
           } : undefined,
@@ -2025,6 +2030,18 @@ export async function createHTTPServer(options: HTTPServerOptions) {
     } catch (error: any) {
       console.error('[API] Failed to mark as unread:', error);
       res.status(500).json({ error: error.message || 'Failed to mark as unread' });
+    }
+  });
+
+  // POST /api/emails/poll - 手动触发一次邮件轮询（供前端刷新按钮调用）
+  app.post('/api/emails/poll', async (_req, res) => {
+    try {
+      const { triggerPoll } = await import('../../services/email-poller.js');
+      await triggerPoll();
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error('[API] Email poll failed:', error);
+      res.status(500).json({ error: error.message || 'Poll failed' });
     }
   });
 
@@ -2744,6 +2761,9 @@ export async function createHTTPServer(options: HTTPServerOptions) {
       res.status(500).json({ error: 'Failed to toggle agent team' });
     }
   });
+
+  // 启动邮件轮询服务（如果配置了邮箱账户）
+  startEmailPoller();
 
   return app;
 }

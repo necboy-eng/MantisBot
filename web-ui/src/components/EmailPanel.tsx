@@ -37,9 +37,11 @@ interface EmailMessage {
   attachments?: Attachment[];
 }
 
-export function EmailPanel({ onAddEmailReference, onSendProgrammatic: _onSendProgrammatic }: {
+export function EmailPanel({ onAddEmailReference, onSendProgrammatic: _onSendProgrammatic, incomingEmails, onIncomingEmailsConsumed }: {
   onAddEmailReference?: (ref: EmailReference) => void;
   onSendProgrammatic?: (message: string) => void;
+  incomingEmails?: any[];
+  onIncomingEmailsConsumed?: () => void;
 }) {
   const { t } = useTranslation();
 
@@ -66,7 +68,14 @@ export function EmailPanel({ onAddEmailReference, onSendProgrammatic: _onSendPro
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; email: EmailMessage } | null>(null);
   const contextMenuRef = useRef<HTMLDivElement>(null);
 
-  const PAGE_SIZE = 30;
+  // 无限滚动：哨兵元素 ref
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  const listContainerRef = useRef<HTMLDivElement>(null); // 滚动容器
+  const loadingMoreRef = useRef(false); // 防止并发触发
+  const fetchEmailsRef = useRef<(reset: boolean) => void>(() => {}); // 始终指向最新 fetchEmails
+  const hasMoreRef = useRef(true); // 同步 hasMore state，供滚动回调读取
+
+  const PAGE_SIZE = 20;
 
   // 点击其他区域关闭右键菜单
   useEffect(() => {
@@ -123,6 +132,38 @@ export function EmailPanel({ onAddEmailReference, onSendProgrammatic: _onSendPro
     }
   }, [currentAccountId, currentMailbox]);
 
+  // 无限滚动：监听滚动容器，接近底部时自动加载更多
+  // 用 onScroll 替代 IntersectionObserver，避免哨兵节点因条件渲染导致绑定失败
+  const handleListScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
+    if (!hasMoreRef.current || loadingMoreRef.current) return;
+    const el = e.currentTarget;
+    // 距底部 120px 以内时触发
+    if (el.scrollHeight - el.scrollTop - el.clientHeight < 120) {
+      fetchEmailsRef.current(false);
+    }
+  }, []);
+
+  // 收到后端推送的新邮件时，插入列表顶部
+  useEffect(() => {
+    if (!incomingEmails || incomingEmails.length === 0) return;
+    // 只插入属于当前账户和 INBOX 的新邮件
+    const relevant = incomingEmails.filter(
+      e => (!currentAccountId || e.accountId === currentAccountId) && e.mailbox === 'INBOX'
+    );
+    if (relevant.length > 0 && currentMailbox === 'INBOX') {
+      // 将新邮件摘要转为 EmailMessage 格式插入列表头部（去重）
+      setEmails(prev => {
+        const existingUids = new Set(prev.map(m => m.uid));
+        const toAdd = relevant
+          .flatMap((e: any) => e.emails || [])
+          .filter((m: any) => !existingUids.has(m.uid))
+          .map((m: any) => ({ ...m, date: m.date || new Date().toISOString() }));
+        return toAdd.length > 0 ? [...toAdd, ...prev] : prev;
+      });
+    }
+    onIncomingEmailsConsumed?.();
+  }, [incomingEmails]);
+
   async function fetchAccounts() {
     try {
       const res = await authFetch('/api/emails/accounts');
@@ -156,12 +197,15 @@ export function EmailPanel({ onAddEmailReference, onSendProgrammatic: _onSendPro
     }
   }
 
-  async function fetchEmails(reset = false) {
+  const fetchEmails = useCallback(async (reset = false) => {
+    if (!reset && loadingMoreRef.current) return; // 防止并发
     try {
       if (reset) {
         setLoading(true);
         setHasMore(true);
+        hasMoreRef.current = true;
       } else {
+        loadingMoreRef.current = true;
         setLoadingMore(true);
       }
 
@@ -187,13 +231,18 @@ export function EmailPanel({ onAddEmailReference, onSendProgrammatic: _onSendPro
       }
 
       setHasMore(data.length === PAGE_SIZE);
+      hasMoreRef.current = data.length === PAGE_SIZE;
     } catch (err) {
       console.error('Failed to fetch emails:', err);
     } finally {
       setLoading(false);
       setLoadingMore(false);
+      loadingMoreRef.current = false;
     }
-  }
+  }, [currentAccountId, currentMailbox, emails.length]);
+
+  // 始终保持 ref 指向最新版本，让 IntersectionObserver 回调无需重新绑定
+  fetchEmailsRef.current = fetchEmails;
 
   async function fetchEmailDetail(uid: number) {
     try {
@@ -464,7 +513,13 @@ export function EmailPanel({ onAddEmailReference, onSendProgrammatic: _onSendPro
           {/* 刷新按钮 */}
           <div className="p-2 border-b border-gray-200 dark:border-gray-700 flex justify-end">
             <button
-              onClick={() => fetchEmails(true)}
+              onClick={async () => {
+                // 先触发后端轮询拉取新邮件，再刷新列表
+                try {
+                  await authFetch('/api/emails/poll', { method: 'POST' });
+                } catch {}
+                fetchEmails(true);
+              }}
               disabled={loading}
               className="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors"
             >
@@ -485,7 +540,11 @@ export function EmailPanel({ onAddEmailReference, onSendProgrammatic: _onSendPro
             </div>
           ) : (
             <>
-              <div className="flex-1 overflow-auto">
+              <div
+                ref={listContainerRef}
+                className="flex-1 overflow-auto"
+                onScroll={handleListScroll}
+              >
                 {emails.map((email) => (
                   <button
                     key={email.uid}
@@ -520,20 +579,16 @@ export function EmailPanel({ onAddEmailReference, onSendProgrammatic: _onSendPro
                     </div>
                   </button>
                 ))}
-              </div>
 
-              {/* 加载更多 */}
-              {hasMore && (
-                <div className="p-3 border-t border-gray-200 dark:border-gray-700">
-                  <button
-                    onClick={() => fetchEmails(false)}
-                    disabled={loadingMore}
-                    className="w-full py-2 text-sm text-primary-600 dark:text-primary-400 hover:bg-gray-50 dark:hover:bg-gray-800 rounded-lg transition-colors"
-                  >
-                    {loadingMore ? t('email.loading', '加载中...') : t('email.loadMore', '加载更多')}
-                  </button>
-                </div>
-              )}
+                {/* 无限滚动哨兵 + 加载指示器 */}
+                {hasMore && (
+                  <div ref={sentinelRef} className="flex justify-center py-3">
+                    {loadingMore && (
+                      <RefreshCw className="w-4 h-4 animate-spin text-primary-500" />
+                    )}
+                  </div>
+                )}
+              </div>
             </>
           )}
         </div>

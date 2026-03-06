@@ -560,15 +560,16 @@ export class ClaudeAgentRunner extends EventEmitter {
     // 应用环境变量隔离
     // 查找当前模型的 apiKey 和 baseUrl，确保第三方 Anthropic-compatible 模型（如 MiniMax、GLM）
     // 使用正确的 API 端点和凭证，而不是默认模型的配置
-    {
-      const config = getConfig();
-      const mc = config.models.find(m => m.name === this.options.model) as any;
-      applyIsolatedEnv({
-        model: this.options.model,
-        apiKey: mc?.apiKey,
-        baseUrl: mc?.baseURL || mc?.baseUrl || mc?.endpoint,
-      });
-    }
+    // mc 提到外层作用域，供后续 query() 调用时复用真实模型 ID
+    const { models: _allModels } = getConfig();
+    const mc = _allModels.find((m: any) => m.name === this.options.model) as any;
+    // 真实 API 模型 ID（如 "glm-5"），区别于显示名（如 "GLM-5-Aliyun"）
+    const resolvedModelId = mc?.model || this.options.model;
+    applyIsolatedEnv({
+      model: resolvedModelId,
+      apiKey: mc?.apiKey,
+      baseUrl: mc?.baseURL || mc?.baseUrl || mc?.endpoint,
+    });
 
     // 检查是否启用 Firecrawl（优先）还是 WebFetch
     // 如果设置了 FIRECRAWL_API_KEY，使用 Firecrawl MCP 工具
@@ -767,9 +768,8 @@ export class ClaudeAgentRunner extends EventEmitter {
       // 将 Skills 内容注入为系统提示词，传给 Claude Agent SDK
       // 这是 MantisBot Skills 生效的核心机制：通过 systemPrompt 文本注入，不依赖 SDK Skill 工具
       systemPrompt,
-      // 使用前端选择的模型（如 claude-sonnet-4-20250514）
-      // 如果不传，SDK 会使用默认模型
-      model: this.options.model,
+      // 使用真实 API 模型 ID（如 "glm-5"），而非显示名（如 "GLM-5-Aliyun"）
+      model: resolvedModelId,
       // 工作目录（动态读取，支持会话中途切换）
       cwd: currentCwd,
       // 使用 tools 指定可用工具（不使用 allowedTools，因为 allowedTools 会自动批准）

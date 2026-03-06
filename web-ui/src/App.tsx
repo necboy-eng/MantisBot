@@ -316,6 +316,11 @@ function App() {
   const [canvasForceMode, setCanvasForceMode] = useState<'preview' | 'files' | 'browser' | 'terminal' | undefined>(undefined);
   const [selectedNotification, setSelectedNotification] = useState<Notification | null>(null);
 
+  // 邮件未读数（由后端轮询通知推送）
+  const [emailUnreadCount, setEmailUnreadCount] = useState(0);
+  // 最近收到的新邮件摘要列表（用于推送给 EmailPanel 插入列表顶部）
+  const [incomingEmails, setIncomingEmails] = useState<any[]>([]);
+
   // 多标签预览：打开的文件列表
   const [openFiles, setOpenFiles] = useState<FileItem[]>([]);
 
@@ -998,6 +1003,16 @@ function App() {
               }
               return newMessages;
             });
+          }
+
+          // 处理邮件新消息推送（定时轮询发现新邮件时触发）
+          if (data.type === 'email-new-messages') {
+            const { unreadCount } = data.payload;
+            if (unreadCount > 0) {
+              setEmailUnreadCount(prev => prev + unreadCount);
+            }
+            // 将整个 payload 传给 EmailPanel（含 accountId/mailbox/emails）
+            setIncomingEmails(prev => [...prev, data.payload]);
           }
 
           // 处理搜索 URL 列表事件
@@ -2730,6 +2745,10 @@ function App() {
           openFiles={openFiles}
           onOpenFilesChange={setOpenFiles}
           onCurrentFileChange={setCurrentFile}
+          emailUnreadCount={emailUnreadCount}
+          onEmailTabOpen={() => setEmailUnreadCount(0)}
+          incomingEmails={incomingEmails}
+          onIncomingEmailsConsumed={() => setIncomingEmails([])}
         />
       </div>
 
