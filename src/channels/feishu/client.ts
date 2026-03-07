@@ -4,6 +4,7 @@ import path from 'path';
 import { getConfig } from '../../config/loader.js';
 import { getFileStorage } from '../../files/index.js';
 import type { FileAttachment } from '../../types.js';
+import { buildMarkdownCard } from './table-converter.js';
 
 // 禁用代理环境变量，避免 EasyConnect/SSH Proxy 等导致重定向循环
 // 这必须在导入 lark SDK 之前执行
@@ -263,35 +264,7 @@ export async function startFeishuWSClient(
   console.log('[Feishu] WebSocket client started');
 }
 
-/**
- * 构建消息卡片（支持 Markdown 格式）
- */
-function buildMarkdownCard(content: string, title?: string): string {
-  const card: any = {
-    config: {
-      wide_screen_mode: true,
-    },
-    elements: [
-      {
-        tag: 'markdown',
-        content: content,
-      },
-    ],
-  };
-
-  // 如果有标题，添加 header
-  if (title) {
-    card.header = {
-      title: {
-        tag: 'plain_text',
-        content: title,
-      },
-      template: 'blue',
-    };
-  }
-
-  return JSON.stringify(card);
-}
+export { buildMarkdownCard } from './table-converter.js';
 
 /**
  * 回复指定消息（引用原消息，适用于群聊 @Bot 场景）
@@ -389,7 +362,7 @@ export async function sendFeishuFile(
   }
 
   // 从 FileStorage 按 url 读取文件内容
-  // url 格式: /api/files/{uuid}.ext → storedName = {uuid}.ext
+  // url 格式：/api/files/{uuid}.ext → storedName = {uuid}.ext
   const storedName = path.basename(attachment.url);
   const fileStorage = getFileStorage();
   const fileData = fileStorage.readFile(storedName);
@@ -480,4 +453,13 @@ export function stopFeishuWSClient(): void {
     wsClient = null;
     console.log('[Feishu] WebSocket client stopped');
   }
+}
+
+/**
+ * 获取飞书客户端（复用工具模块的客户端管理器）
+ */
+export async function getFeishuClientForTools(userId?: string): Promise<any> {
+  // 动态导入并使用工具模块的客户端管理器
+  const feishuModule = await import('../../agents/tools/feishu/client.js');
+  return feishuModule.getFeishuClient(userId);
 }

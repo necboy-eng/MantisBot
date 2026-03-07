@@ -169,6 +169,57 @@ export const FeishuConfigSchema = z.object({
   appSecret: z.string().optional(),
   verificationToken: z.string().optional(),
   encryptKey: z.string().optional(),
+  domain: z.enum(['feishu', 'lark']).default('feishu'),
+  connectionMode: z.enum(['websocket', 'polling']).default('websocket'),
+  debug: z.boolean().default(false),
+
+  // OAuth 配置
+  oauth: z.object({
+    enabled: z.boolean().default(true),
+    deviceCodeTTL: z.number().default(300), // 设备码有效期（秒）
+    pollInterval: z.number().default(3000), // 轮询间隔（毫秒）
+    maxPollAttempts: z.number().default(60), // 最大轮询次数
+  }).default({}),
+
+  // 流式卡片配置
+  streaming: z.object({
+    enabled: z.boolean().default(true), // 是否启用流式卡片
+    updateInterval: z.number().default(500), // 更新间隔（毫秒）
+    showThinking: z.boolean().default(true), // 是否显示"思考中"状态
+  }).default({}),
+
+  // 工具权限配置
+  permissions: z.object({
+    // IM 消息读取权限
+    im: z.object({
+      enabled: z.boolean().default(true),
+      requireUAT: z.boolean().default(true), // 是否需要用户授权
+    }).default({}),
+
+    // 文档操作权限
+    doc: z.object({
+      enabled: z.boolean().default(true),
+      requireUAT: z.boolean().default(true),
+    }).default({}),
+
+    // Bitable 权限
+    bitable: z.object({
+      enabled: z.boolean().default(true),
+      requireUAT: z.boolean().default(false), // Bot 可以访问
+    }).default({}),
+
+    // 任务管理权限
+    task: z.object({
+      enabled: z.boolean().default(true),
+      requireUAT: z.boolean().default(false),
+    }).default({}),
+
+    // 日历权限
+    calendar: z.object({
+      enabled: z.boolean().default(true),
+      requireUAT: z.boolean().default(true),
+    }).default({}),
+  }).default({}),
 });
 
 export const SlackConfigSchema = z.object({
@@ -393,13 +444,7 @@ export const ConfigSchema = z.object({
     httpWs: z.object({
       enabled: z.boolean().default(true),
     }).optional(),
-    feishu: z.object({
-      enabled: z.boolean().default(false),
-      appId: z.string().optional(),
-      appSecret: z.string().optional(),
-      verificationToken: z.string().optional(),
-      encryptKey: z.string().optional(),
-    }).optional(),
+    feishu: FeishuConfigSchema.optional(),
     slack: z.object({
       enabled: z.boolean().default(false),
       botToken: z.string().optional(),

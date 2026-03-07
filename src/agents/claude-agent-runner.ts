@@ -949,11 +949,11 @@ export class ClaudeAgentRunner extends EventEmitter {
         console.log('[ClaudeAgentRunner] Starting NEW session (no previous session_id)');
       }
 
-      const result = await query(queryParams as any);
+      const queryResult = query(queryParams as any);
 
-      console.log('[ClaudeAgentRunner] Query result type:', typeof result, result ? 'object' : 'null');
-      if (!result || typeof result !== 'object') {
-        console.error('[ClaudeAgentRunner] Invalid query result:', result);
+      console.log('[ClaudeAgentRunner] Query result type:', typeof queryResult, queryResult ? 'object' : 'null');
+      if (!queryResult || typeof queryResult !== 'object') {
+        console.error('[ClaudeAgentRunner] Invalid query result:', queryResult);
         yield { type: 'complete' };
         return;
       }
@@ -982,7 +982,7 @@ export class ClaudeAgentRunner extends EventEmitter {
         if (agentNames.includes(toolName)) return toolName;
         return null;
       };
-      for await (const event of result as AsyncIterable<any>) {
+      for await (const event of queryResult) {
         // 检查中断信号
         if (abortSignal?.aborted) {
           console.log('[ClaudeAgentRunner] Execution aborted by user');

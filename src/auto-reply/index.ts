@@ -1,6 +1,6 @@
 // src/auto-reply/index.ts
 
-import { MessageDispatcher, DispatchResult } from './dispatch.js';
+import { MessageDispatcher, DispatchResult, StreamGenerator } from './dispatch.js';
 import { CommandRegistry, registerHelpCommand } from './commands/registry.js';
 import { registerClearCommand } from './commands/clear.js';
 import { registerStatusCommand } from './commands/status.js';
@@ -15,7 +15,7 @@ import { MemoryManager } from '../memory/manager.js';
 import { ToolRegistry } from '../agents/tools/registry.js';
 
 export { MessageDispatcher } from './dispatch.js';
-export type { DispatchResult } from './dispatch.js';
+export type { DispatchResult, StreamGenerator } from './dispatch.js';
 
 export class AutoReply {
   private dispatcher: MessageDispatcher;
@@ -88,5 +88,57 @@ export class AutoReply {
 
     // Handle as regular message
     return this.dispatcher.dispatch(message, channelContext);
+  }
+
+  /**
+   * 流式处理消息（支持飞书等平台的流式输出）
+   */
+  async *handleMessageStream(
+    content: string,
+    context: { platform: string; chatId: string; userId: string }
+  ): StreamGenerator {
+    // Check for plugin commands first
+    if (content.startsWith('/') && content.includes(':')) {
+      // Plugin commands don't support streaming, return as regular message
+      const result = await this.handleMessage(content, context);
+      if (result) {
+        yield { type: 'text', content: result.response };
+        yield { type: 'done', files: result.files };
+      }
+      return;
+    }
+
+    // Check for built-in commands
+    const parsed = this.commandRegistry.parse(content);
+    if (parsed) {
+      const command = this.commandRegistry.get(parsed.command);
+      if (command) {
+        // Commands don't support streaming
+        const response = await command.handler(parsed.args, context);
+        yield { type: 'text', content: response };
+        yield { type: 'done' };
+        return;
+      }
+    }
+
+    // Build ChannelMessage
+    const message: ChannelMessage = {
+      id: `${Date.now()}`,
+      content,
+      chatId: context.chatId,
+      userId: context.userId,
+      platform: context.platform,
+      timestamp: Date.now(),
+    };
+
+    // Build ChannelContext
+    const channelContext: ChannelContext = {
+      platform: context.platform,
+      chatId: context.chatId,
+      userId: context.userId,
+    };
+
+    // Handle as streaming message
+    yield* this.dispatcher.dispatchStream(message, channelContext);
   }
 }

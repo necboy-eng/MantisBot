@@ -246,15 +246,54 @@ export async function main(): Promise<void> {
     skillsLoader,
     pluginLoader,
     async (message) => {
-      const result = await autoReply.handleMessage(message.content, {
-        platform: message.platform,
-        chatId: message.chatId,
-        userId: message.userId || ''
-      });
+      const channel = getChannelRegistry().getByPlatform(message.platform);
 
-      if (result) {
-        const channel = getChannelRegistry().getByPlatform(message.platform);
-        if (channel) {
+      if (!channel) {
+        return;
+      }
+
+      // 检查是否支持流式输出
+      const supportsStreaming = typeof (channel as any).sendWithStream === 'function';
+
+      if (supportsStreaming) {
+        // 使用流式输出
+        console.log(`[Entry] Using streaming for platform: ${message.platform}`);
+        try {
+          const generator = autoReply.handleMessageStream(message.content, {
+            platform: message.platform,
+            chatId: message.chatId,
+            userId: message.userId || ''
+          });
+
+          // 调用 channel 的流式发送方法
+          for await (const _ of (channel as any).sendWithStream(
+            message.chatId,
+            message.userId,
+            generator
+          )) {
+            // 消费 generator
+          }
+        } catch (streamError) {
+          console.error('[Entry] Streaming failed, falling back to regular send:', streamError);
+          // 流式失败，降级到普通发送
+          const result = await autoReply.handleMessage(message.content, {
+            platform: message.platform,
+            chatId: message.chatId,
+            userId: message.userId || ''
+          });
+          if (result) {
+            await channel.sendMessage(message.chatId, result.response, result.files);
+          }
+        }
+      } else {
+        // 不支持流式，使用普通发送
+        const result = await autoReply.handleMessage(message.content, {
+          platform: message.platform,
+          chatId: message.chatId,
+          userId: message.userId || ''
+        });
+
+        if (result) {
           await channel.sendMessage(
             message.chatId,
             result.response,

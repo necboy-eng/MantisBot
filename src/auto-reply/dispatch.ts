@@ -3,6 +3,7 @@
 import type { ChannelMessage, ChannelContext } from '../channels/channel.interface.js';
 import type { FileAttachment } from '../types.js';
 import type { IAgentRunner } from '../agents/unified-runner.js';
+import type { StreamChunk } from '../agents/types.js';
 import { SessionManager } from '../session/manager.js';
 import { MemoryManager } from '../memory/manager.js';
 import { truncateHistory } from '../utils/token-counter.js';
@@ -16,6 +17,11 @@ export interface DispatchResult {
   success: boolean;
   files?: FileAttachment[];
 }
+
+/**
+ * 流式输出生成器类型
+ */
+export type StreamGenerator = AsyncGenerator<{ type: 'text' | 'done'; content?: string; files?: FileAttachment[] }>;
 
 export class MessageDispatcher {
   private agentRunner: IAgentRunner;
@@ -197,6 +203,130 @@ ${content}
         response: `处理消息时出错: ${error}`,
         success: false,
       };
+    }
+  }
+
+  /**
+   * 流式分发消息（支持飞书等平台的流式输出）
+   */
+  async *dispatchStream(
+    message: ChannelMessage,
+    context: ChannelContext
+  ): StreamGenerator {
+    const { userId, chatId } = message;
+    const sessionId = chatId;
+
+    try {
+      // Get session or create new one
+      let session = this.sessionManager.getSession(sessionId);
+      if (!session) {
+        session = this.sessionManager.createSession(sessionId, 'default');
+      }
+
+      // 读取上下文窗口配置
+      const config = getConfig();
+      const maxInputChars = config.session?.maxInputChars ?? 80000;
+
+      // Build conversation history
+      const rawHistory = session.messages.map(m => ({
+        role: m.role,
+        content: m.content,
+      }));
+
+      const historyBudget = Math.floor(maxInputChars * 0.7);
+      const truncated = truncateHistory(rawHistory, historyBudget);
+      const history = truncated as Array<{ role: 'user' | 'assistant' | 'system' | 'tool'; content: string }>;
+
+      // 解析团队触发
+      const { team: activeTeam, content } = this.resolveTeam(message);
+
+      if (activeTeam) {
+        const runner = this.agentRunner as any;
+        if (typeof runner.setActiveTeam === 'function') {
+          runner.setActiveTeam(activeTeam);
+        }
+        console.log(`[DispatchStream] Active team: ${activeTeam.name}`);
+      } else {
+        const runner = this.agentRunner as any;
+        if (typeof runner.setActiveTeam === 'function') {
+          runner.setActiveTeam(null);
+        }
+      }
+
+      // Search relevant memories
+      const memories = await this.memoryManager.searchHybrid('default', content, {
+        limit: 7,
+        sessionKey: undefined
+      });
+
+      // Build prompt with memory context
+      let prompt: string;
+      if (memories.length > 0) {
+        const memoryContext = memories.map((m, i) =>
+          `${i + 1}. ${m.content}`
+        ).join('\n');
+
+        prompt = `📋 **相关记忆**（请在回答前先参考这些信息）：
+${memoryContext}
+
+---
+
+💬 **用户问题**：
+${content}
+
+💡 **提示**：请先查看上面的相关记忆，然后回答用户问题。如果记忆中有相关信息，请直接使用。`;
+      } else {
+        prompt = content;
+      }
+
+      // Add user message to session
+      this.sessionManager.addMessage(sessionId, {
+        role: 'user',
+        content: message.content,
+      });
+
+      // 流式运行
+      let fullResponse = '';
+      const attachments: FileAttachment[] = [];
+
+      for await (const chunk of this.agentRunner.streamRun(prompt, history)) {
+        if (chunk.type === 'text' && chunk.content) {
+          fullResponse += chunk.content;
+          yield { type: 'text', content: chunk.content };
+        } else if (chunk.type === 'complete') {
+          // 收集附件
+          if (chunk.attachments) {
+            attachments.push(...chunk.attachments);
+          }
+        }
+      }
+
+      // 保存助手消息到 session
+      this.sessionManager.addMessage(sessionId, {
+        role: 'assistant',
+        content: fullResponse,
+      });
+
+      // Trigger agent.end hook
+      try {
+        await getHooksLoader().emit('agent.end', {
+          success: true,
+          response: fullResponse,
+          toolCalls: [],
+          sessionId,
+          userId,
+        });
+      } catch (hookError) {
+        console.warn('[DispatchStream] Hook error (non-blocking):', hookError);
+      }
+
+      // 发送完成信号
+      yield { type: 'done', content: fullResponse, files: attachments };
+
+    } catch (error) {
+      console.error('[DispatchStream] Error:', error);
+      yield { type: 'text', content: `处理消息时出错: ${error}` };
+      yield { type: 'done' };
     }
   }
 }

@@ -1,3 +1,5 @@
+// src/agents/tools/registry.ts
+
 import type { Tool, ToolInfo } from '../../types.js';
 import { loggerTool } from './logger.js';
 import { readSkillTool } from './read-skill.js';
@@ -70,6 +72,9 @@ export class ToolRegistry {
         this.tools.set(tool.name, tool);
       }
     }
+
+    // Register Feishu tools (新增)
+    this.registerFeishuTools();
   }
 
   getTool(name: string): Tool | undefined {
@@ -108,5 +113,24 @@ export class ToolRegistry {
    */
   async execute(name: string, params: Record<string, unknown>): Promise<unknown> {
     return this.executeTool(name, params);
+  }
+
+  /**
+   * 注册飞书工具（新增）
+   */
+  registerFeishuTools(): void {
+    import('./feishu/index.js').then((module: any) => {
+      module.registerFeishuTools(this).catch(console.error);
+    });
+  }
+
+  /**
+   * 获取飞书配置（新增）
+   * 用于工具注册时读取配置
+   */
+  async getFeishuConfig(): Promise<any | undefined> {
+    const { getConfig } = await import('../../config/loader.js');
+    const config = getConfig();
+    return (config.channels as any)?.feishu;
   }
 }
