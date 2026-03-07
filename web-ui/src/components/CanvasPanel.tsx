@@ -47,6 +47,7 @@ interface CanvasPanelProps {
   terminalOutputs?: TerminalOutput[];
   searchUrlLists?: SearchUrlList[];
   forceMode?: CanvasMode;
+  forceBrowserViewMode?: BrowserViewMode;
   onClearForceMode?: () => void;
   homeDirectory?: string;
   officePreviewServer?: string;
@@ -82,6 +83,7 @@ export function CanvasPanel({
   terminalOutputs = [],
   searchUrlLists = [],
   forceMode,
+  forceBrowserViewMode,
   onClearForceMode,
   homeDirectory = '/',
   officePreviewServer,
@@ -139,6 +141,13 @@ export function CanvasPanel({
   const [fileManagerPath, setFileManagerPath] = useState(homeDirectory);
   // 浏览器视图模式：截图 or 实时预览
   const [browserViewMode, setBrowserViewMode] = useState<BrowserViewMode>('screenshots');
+
+  // 当有强制浏览器视图模式时，切换到该模式
+  useEffect(() => {
+    if (forceBrowserViewMode) {
+      setBrowserViewMode(forceBrowserViewMode);
+    }
+  }, [forceBrowserViewMode]);
   // 实时预览的 URL
   const [livePreviewUrl, setLivePreviewUrl] = useState<string>('');
   // iframe 加载错误

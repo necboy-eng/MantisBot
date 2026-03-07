@@ -2,6 +2,7 @@ import express from 'express';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import archiver from 'archiver';
 import { workDirManager } from '../../workdir/manager.js';
 import { getStorageManager, hasStorageManager } from '../../storage/manager.js';
 import { StorageError } from '../../storage/storage.interface.js';
@@ -996,6 +997,131 @@ router.post('/api/explore/rename', async (req, res) => {
     res.status(500).json({
       error: 'Failed to rename: ' + (error instanceof Error ? error.message : 'Unknown error')
     });
+  }
+});
+
+// 批量下载文件（打包成 zip）
+router.post('/api/explore/download-zip', async (req, res) => {
+  const { paths } = req.body;
+  const baseDir = workDirManager.getCurrentWorkDir();
+
+  if (!paths || !Array.isArray(paths) || paths.length === 0) {
+    return res.status(400).json({ error: 'paths array is required' });
+  }
+
+  // 验证所有路径
+  for (const targetPath of paths) {
+    if (!isPathSafe(baseDir, targetPath)) {
+      return res.status(403).json({ error: 'Path traversal detected' });
+    }
+    const sensitiveError = checkSensitivePathAccess(targetPath, baseDir);
+    if (sensitiveError) {
+      return res.status(403).json({ error: sensitiveError });
+    }
+  }
+
+  try {
+    // 设置响应头
+    const zipFilename = `files_${Date.now()}.zip`;
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(zipFilename)}`);
+
+    // 创建 archiver 实例
+    const archive = archiver('zip', {
+      zlib: { level: 6 } // 压缩级别
+    });
+
+    // 监听错误
+    archive.on('error', (err) => {
+      console.error('Archive error:', err);
+      if (!res.headersSent) {
+        res.status(500).json({ error: 'Failed to create zip file' });
+      }
+    });
+
+    // 监听警告
+    archive.on('warning', (err) => {
+      if (err.code === 'ENOENT') {
+        console.warn('Archive warning:', err);
+      } else {
+        throw err;
+      }
+    });
+
+    // 将 archive 输出到响应
+    archive.pipe(res);
+
+    // 添加文件到 archive
+    let totalSize = 0;
+    const fileInfos: { path: string; name: string; size: number }[] = [];
+
+    for (const targetPath of paths) {
+      // 对于绝对路径，直接使用本地文件系统
+      const useStorageManager = hasStorageManager() && !path.isAbsolute(targetPath);
+
+      if (useStorageManager) {
+        const storageManager = getStorageManager();
+        const storage = storageManager.getCurrentStorage();
+
+        const relativePath = path.isAbsolute(targetPath)
+          ? path.relative(baseDir, targetPath)
+          : targetPath;
+
+        const exists = await storage.exists(relativePath);
+        if (!exists) {
+          continue; // 跳过不存在的文件
+        }
+
+        const stats = await storage.getStats(relativePath);
+        if (stats.isDirectory) {
+          continue; // 跳过目录
+        }
+
+        const content = await storage.readFile(relativePath);
+        const name = path.basename(targetPath);
+        archive.append(content, { name });
+        totalSize += content.length;
+        fileInfos.push({ path: targetPath, name, size: content.length });
+      } else {
+        const fullPath = resolveUserPath(baseDir, targetPath);
+
+        if (!fs.existsSync(fullPath)) {
+          continue; // 跳过不存在的文件
+        }
+
+        const stats = fs.statSync(fullPath);
+        if (stats.isDirectory()) {
+          continue; // 跳过目录
+        }
+
+        const name = path.basename(fullPath);
+        archive.file(fullPath, { name });
+        totalSize += stats.size;
+        fileInfos.push({ path: targetPath, name, size: stats.size });
+      }
+    }
+
+    // 如果没有有效文件，返回错误
+    if (fileInfos.length === 0) {
+      archive.finalize();
+      return res.status(400).json({ error: 'No valid files to download' });
+    }
+
+    // 返回原始文件总大小，供前端计算进度参考
+    // 注意：zip 大小难以精确预估，不设置 Content-Length，使用 chunked encoding
+    res.setHeader('X-Total-Size', totalSize.toString());
+    res.removeHeader('Content-Length');
+
+    // 完成打包
+    await archive.finalize();
+
+  } catch (error) {
+    console.error('Download zip error:', error);
+    if (!res.headersSent) {
+      res.status(500).json({
+        error: 'Failed to download: ' + (error instanceof Error ? error.message : 'Unknown error')
+      });
+    }
   }
 });
 

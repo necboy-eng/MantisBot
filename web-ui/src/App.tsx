@@ -337,6 +337,7 @@ function App() {
   const [terminalOutputs, setTerminalOutputs] = useState<TerminalOutput[]>([]);
   const [searchUrlLists, setSearchUrlLists] = useState<SearchUrlList[]>([]); // 搜索 URL 列表
   const [canvasForceMode, setCanvasForceMode] = useState<'preview' | 'files' | 'browser' | 'terminal' | undefined>(undefined);
+  const [canvasForceBrowserViewMode, setCanvasForceBrowserViewMode] = useState<'screenshots' | 'live' | 'search-urls' | undefined>(undefined);
   const [selectedNotification, setSelectedNotification] = useState<Notification | null>(null);
 
   // 邮件未读数（由后端轮询通知推送）
@@ -1044,6 +1045,7 @@ function App() {
             // 自动打开画布并切换到浏览器标签的搜索结果视图
             setCanvasOpen(true);
             setCanvasForceMode('browser');
+            setCanvasForceBrowserViewMode('search-urls');
           }
         } catch (e) {
           console.error('[WebSocket] Failed to parse message:', e);
@@ -2738,6 +2740,7 @@ function App() {
           onClose={() => {
             setCanvasOpen(false);
             setCanvasForceMode(undefined);  // 重置强制模式
+            setCanvasForceBrowserViewMode(undefined);  // 重置浏览器视图强制模式
           }}
           currentFile={currentFile}
           onFileSelect={handleFileSelect}
@@ -2745,6 +2748,7 @@ function App() {
           terminalOutputs={terminalOutputs}
           searchUrlLists={searchUrlLists}
           forceMode={canvasForceMode}
+          forceBrowserViewMode={canvasForceBrowserViewMode}
           onClearForceMode={() => setCanvasForceMode(undefined)}
           homeDirectory={homeDirectory}
           officePreviewServer={config?.officePreviewServer}

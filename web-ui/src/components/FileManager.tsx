@@ -145,6 +145,14 @@ export function FileManager({
     type: 'success' | 'error';
   }>({ visible: false, message: '', type: 'success' });
 
+  // 多选状态
+  const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
+
+  // 下载状态
+  const [downloading, setDownloading] = useState(false);
+  const [downloadProgress, setDownloadProgress] = useState(0);
+  const [downloadTotal, setDownloadTotal] = useState(0);
+
   // 加载目录
   const loadDirectory = useCallback(async (dirPath: string) => {
     setLoading(true);
@@ -424,6 +432,9 @@ export function FileManager({
       case 'copy':
         await handleCopy(item);
         break;
+      case 'download':
+        await handleDownload(item);
+        break;
       case 'addToChat':
         onAddReference?.(item);
         break;
@@ -511,6 +522,142 @@ export function FileManager({
       showToast('重命名成功', 'success');
     } catch (error) {
       showToast('重命名失败: ' + (error instanceof Error ? error.message : '未知错误'), 'error');
+    }
+  };
+
+  // 切换单个文件选择
+  const toggleItemSelection = (itemPath: string) => {
+    setSelectedItems(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(itemPath)) {
+        newSet.delete(itemPath);
+      } else {
+        newSet.add(itemPath);
+      }
+      return newSet;
+    });
+  };
+
+  // 全选/取消全选
+  const toggleSelectAll = () => {
+    const sortedItems = sortItems(items);
+    const filesOnly = sortedItems.filter(item => item.type === 'file');
+
+    if (selectedItems.size === filesOnly.length) {
+      // 已全选，取消全选
+      setSelectedItems(new Set());
+    } else {
+      // 未全选，全选所有文件
+      setSelectedItems(new Set(filesOnly.map(item => item.path)));
+    }
+  };
+
+  // 清空选择
+  const clearSelection = () => {
+    setSelectedItems(new Set());
+  };
+
+  // 下载文件（单文件或批量）
+  const handleDownload = async (item?: FileSystemItem) => {
+    const pathsToDownload = item
+      ? [item.path]
+      : Array.from(selectedItems);
+
+    if (pathsToDownload.length === 0) {
+      showToast('请先选择要下载的文件', 'error');
+      return;
+    }
+
+    try {
+      setDownloading(true);
+      setDownloadProgress(0);
+      setDownloadTotal(0);
+
+      if (pathsToDownload.length === 1) {
+        // 单文件直接下载
+        const filePath = pathsToDownload[0];
+        const res = await authFetch(`/api/explore/binary?path=${encodeURIComponent(filePath)}`);
+
+        if (!res.ok) {
+          throw new Error('下载失败');
+        }
+
+        const contentLength = res.headers.get('Content-Length');
+        const total = contentLength ? parseInt(contentLength, 10) : 0;
+        setDownloadTotal(total);
+
+        const reader = res.body?.getReader();
+        const chunks: BlobPart[] = [];
+        let received = 0;
+
+        if (reader) {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            chunks.push(value);
+            received += value.length;
+            setDownloadProgress(received);
+          }
+        }
+
+        const blob = new Blob(chunks);
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filePath.split('/').pop() || 'download';
+        a.click();
+        URL.revokeObjectURL(url);
+      } else {
+        // 多文件打包下载
+        const res = await authFetch('/api/explore/download-zip', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ paths: pathsToDownload })
+        });
+
+        if (!res.ok) {
+          const data = await res.json();
+          throw new Error(data.error || '下载失败');
+        }
+
+        // 使用 X-Total-Size 获取原始文件总大小（zip 大小无法精确预估）
+        const totalSizeHeader = res.headers.get('X-Total-Size');
+        const total = totalSizeHeader ? parseInt(totalSizeHeader, 10) : 0;
+        setDownloadTotal(total);
+
+        const reader = res.body?.getReader();
+        const chunks: BlobPart[] = [];
+        let received = 0;
+
+        if (reader) {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            chunks.push(value);
+            received += value.length;
+            setDownloadProgress(received);
+          }
+        }
+
+        const blob = new Blob(chunks, { type: 'application/zip' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `files_${Date.now()}.zip`;
+        a.click();
+        URL.revokeObjectURL(url);
+
+        // 下载完成后清空选择
+        clearSelection();
+      }
+
+      showToast('下载完成', 'success');
+    } catch (error) {
+      showToast('下载失败: ' + (error instanceof Error ? error.message : '未知错误'), 'error');
+    } finally {
+      setDownloading(false);
+      setDownloadProgress(0);
+      setDownloadTotal(0);
     }
   };
 
@@ -648,10 +795,26 @@ export function FileManager({
   // 渲染列表视图
   const renderListView = () => {
     const sortedItems = sortItems(items);
+    const filesOnly = sortedItems.filter(item => item.type === 'file');
+    const isAllSelected = filesOnly.length > 0 && selectedItems.size === filesOnly.length;
+    const isPartialSelected = selectedItems.size > 0 && selectedItems.size < filesOnly.length;
 
     return (
       <div className="p-2">
         <div className="flex items-center px-3 py-2 text-xs font-medium text-gray-500 dark:text-gray-400 border-b dark:border-gray-700">
+          {/* 全选复选框 */}
+          <div className="w-8 flex items-center justify-center">
+            <input
+              type="checkbox"
+              checked={isAllSelected}
+              ref={el => {
+                if (el) el.indeterminate = isPartialSelected;
+              }}
+              onChange={toggleSelectAll}
+              className="w-4 h-4 rounded border-gray-300 text-primary-500 focus:ring-primary-500 cursor-pointer"
+              onClick={(e) => e.stopPropagation()}
+            />
+          </div>
           <div
             className="flex-1 flex items-center gap-1 cursor-pointer hover:text-primary-500 dark:hover:text-primary-400 select-none"
             onClick={() => toggleSort('name')}
@@ -682,12 +845,26 @@ export function FileManager({
               className={`flex items-center px-3 py-2 cursor-pointer transition-colors ${
                 selectedItem?.path === item.path
                   ? 'bg-primary-100 dark:bg-primary-900'
-                  : 'hover:bg-gray-50 dark:hover:bg-gray-800'
+                  : selectedItems.has(item.path)
+                    ? 'bg-blue-50 dark:bg-blue-900/20'
+                    : 'hover:bg-gray-50 dark:hover:bg-gray-800'
               }`}
               onClick={() => handleClick(item)}
               onDoubleClick={() => handleDoubleClick(item)}
               onContextMenu={(e) => handleContextMenu(e, item)}
             >
+              {/* 单个文件复选框 */}
+              <div className="w-8 flex items-center justify-center">
+                {item.type === 'file' && (
+                  <input
+                    type="checkbox"
+                    checked={selectedItems.has(item.path)}
+                    onChange={() => toggleItemSelection(item.path)}
+                    className="w-4 h-4 rounded border-gray-300 text-primary-500 focus:ring-primary-500 cursor-pointer"
+                    onClick={(e) => e.stopPropagation()}
+                  />
+                )}
+              </div>
               <div className="flex items-center flex-1 min-w-0">
                 <span className="text-xl mr-3">{getFileIcon(item)}</span>
                 <span className="truncate dark:text-white">{item.name}</span>
@@ -941,7 +1118,24 @@ export function FileManager({
       {/* 状态栏 */}
       <div className="flex items-center justify-between px-4 py-1.5 text-xs text-gray-500 dark:text-gray-400 border-t dark:border-gray-700 bg-gray-50 dark:bg-gray-900">
         <span>{items.length} 个项目</span>
-        {selectedItem && <span>已选择: {selectedItem.name}</span>}
+        {selectedItems.size > 0 && (
+          <div className="flex items-center gap-2">
+            <span>已选择 {selectedItems.size} 个文件</span>
+            <button
+              onClick={() => handleDownload()}
+              className="px-2 py-0.5 bg-primary-500 text-white rounded hover:bg-primary-600 transition-colors"
+            >
+              批量下载
+            </button>
+            <button
+              onClick={clearSelection}
+              className="px-2 py-0.5 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+            >
+              取消选择
+            </button>
+          </div>
+        )}
+        {selectedItem && selectedItems.size === 0 && <span>已选择: {selectedItem.name}</span>}
         {uploading && <span className="text-primary-500">正在上传...</span>}
       </div>
 
@@ -990,6 +1184,15 @@ export function FileManager({
                   <span>💬</span>
                   <span>添加到对话</span>
                 </button>
+                {contextMenu.item?.type === 'file' && (
+                  <button
+                    onClick={() => handleMenuAction('download')}
+                    className="w-full px-4 py-2 text-left hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2 dark:text-white"
+                  >
+                    <span>⬇️</span>
+                    <span>下载</span>
+                  </button>
+                )}
                 <button
                   onClick={() => handleMenuAction('rename')}
                   className="w-full px-4 py-2 text-left hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2 dark:text-white"
@@ -1168,6 +1371,36 @@ export function FileManager({
             }`}
           >
             {toast.message}
+          </div>
+        </div>
+      )}
+
+      {/* 下载进度条模态框 */}
+      {downloading && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl p-6 max-w-md w-full mx-4">
+            <h3 className="text-lg font-semibold mb-4 dark:text-white">
+              正在下载...
+            </h3>
+            <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-4 overflow-hidden">
+              <div
+                className="bg-primary-500 h-full rounded-full transition-all duration-300"
+                style={{
+                  width: downloadTotal > 0
+                    ? `${Math.min(100, (downloadProgress / downloadTotal) * 100)}%`
+                    : '0%'
+                }}
+              />
+            </div>
+            <div className="flex justify-between mt-2 text-sm text-gray-500 dark:text-gray-400">
+              <span>{formatSize(downloadProgress)}</span>
+              <span>{downloadTotal > 0 ? formatSize(downloadTotal) : '计算中...'}</span>
+            </div>
+            {downloadTotal > 0 && (
+              <div className="text-center mt-2 text-sm text-gray-500 dark:text-gray-400">
+                {Math.round((downloadProgress / downloadTotal) * 100)}%
+              </div>
+            )}
           </div>
         </div>
       )}
