@@ -98,7 +98,12 @@ export function ChannelManagementSection({ isOpen }: ChannelManagementSectionPro
 
   async function testConnection(id: string) {
     setTestingId(id);
-    setTestResults(prev => ({ ...prev, [id]: { success: false, message: t('channelManagement.testing') } }));
+    // 测试中时不显示结果，避免先显示红色失败提示
+    setTestResults(prev => {
+      const updated = { ...prev };
+      delete updated[id];
+      return updated;
+    });
 
     try {
       const res = await authFetch(`/api/channels/${id}/test`, { method: 'POST' });
