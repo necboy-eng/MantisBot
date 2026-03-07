@@ -34,6 +34,8 @@ export interface Message {
   toolStatus?: PersistedToolStatus[];
   /** 思考过程摘要（截断到前 500 字符） */
   thinking?: string;
+  /** 消息元数据（如 platform、chatId 等） */
+  metadata?: Record<string, unknown>;
 }
 
 // 审批模式类型

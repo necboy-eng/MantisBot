@@ -186,8 +186,13 @@ ${content}
       this.sessionManager.addMessage(sessionId, {
         role: 'user',
         content: message.content,
+        metadata: {
+          platform: message.platform,
+          chatId: message.chatId,
+          userId: message.userId,
+        },
       });
-      this.sessionManager.addMessage(sessionId, {
+      const assistantMsg = this.sessionManager.addMessage(sessionId, {
         role: 'assistant',
         content: result.response,
       });
@@ -283,6 +288,11 @@ ${content}
       this.sessionManager.addMessage(sessionId, {
         role: 'user',
         content: message.content,
+        metadata: {
+          platform: message.platform,
+          chatId: message.chatId,
+          userId: message.userId,
+        },
       });
 
       // 流式运行

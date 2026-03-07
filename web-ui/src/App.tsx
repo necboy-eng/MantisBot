@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { MessageCircle, Settings, Plus, Bot, FileText, Download, Image, Trash2, ExternalLink, Clock, LayoutDashboard, Wifi, FolderOpen, Square, CheckSquare, LogOut, Star, ChevronDown, ChevronRight, ChevronLeft, Terminal } from 'lucide-react';
+import { MessageCircle, Settings, Plus, Bot, FileText, Download, Image, Trash2, ExternalLink, Clock, LayoutDashboard, Wifi, FolderOpen, Square, CheckSquare, LogOut, Star, ChevronDown, ChevronRight, ChevronLeft, Terminal, MessageSquare, Slack, Phone, MessageCircleCode, Globe } from 'lucide-react';
 import { CanvasPanel, FileItem, BrowserSnapshot, TerminalOutput, SearchUrlList } from './components/CanvasPanel';
 import { CronPanel } from './components/CronPanel';
 import { TunnelPanel } from './components/TunnelPanel';
@@ -82,6 +82,7 @@ interface Session {
   model: string;
   approvalMode?: ApprovalMode;  // 审批模式
   starred?: boolean;            // 星标置顶
+  platform?: string;            // 渠道平台标识（feishu, slack, web 等）
 }
 
 interface AgentTeam {
@@ -112,6 +113,28 @@ function formatFileSize(bytes: number): string {
 function getFileIcon(mimeType: string | undefined) {
   if (mimeType?.startsWith('image/')) return Image;
   return FileText;
+}
+
+// 获取会话平台对应的图标
+function getSessionIcon(platform: string | undefined) {
+  switch (platform) {
+    case 'feishu':
+      return MessageSquare; // 飞书
+    case 'slack':
+      return Slack;
+    case 'whatsapp':
+      return Globe;  // WhatsApp
+    case 'wechat':
+      return Phone; // 微信
+    case 'wecom':
+      return MessageCircleCode; // 企业微信
+    case 'dingtalk':
+      return Phone; // 钉钉
+    case 'cron':
+      return Clock; // 定时任务
+    default:
+      return MessageCircle; // 默认（web）
+  }
 }
 
 // 工具名称友好显示
@@ -698,9 +721,6 @@ function App() {
     localStorage.setItem('readNotificationIds', JSON.stringify([...ids]));
   };
 
-  // 固定的定时任务通知会话 ID
-  const CRON_NOTIFICATION_SESSION_ID = 'cron-notification';
-
   // Use refs to avoid unnecessary reconnections
   const currentSessionRef = useRef(currentSession);
   const sessionsRef = useRef(sessions);
@@ -886,23 +906,20 @@ function App() {
             const { sessionId, message } = data.payload;
             console.log('[WebSocket] sessionId:', sessionId, 'currentSession:', currentSessionRef.current);
 
-            // For cron jobs (sessionId starts with 'cron:'), redirect to cron-notification session
             // For any new session, show the message
             // Note: 'default' is a normal user session, not a cron job
-            const isCronJob = sessionId.startsWith('cron:');
-            const displaySessionId = isCronJob ? CRON_NOTIFICATION_SESSION_ID : sessionId;
-            const isNewSession = !sessionsRef.current.find(s => s.id === displaySessionId);
-            const isCurrentSession = displaySessionId === currentSessionRef.current;
+            const isNewSession = !sessionsRef.current.find(s => s.id === sessionId);
+            const isCurrentSession = sessionId === currentSessionRef.current;
 
-            console.log('[WebSocket] isCronJob:', isCronJob, 'displaySessionId:', displaySessionId, 'isNewSession:', isNewSession, 'isCurrentSession:', isCurrentSession);
+            console.log('[WebSocket] sessionId:', sessionId, 'isNewSession:', isNewSession, 'isCurrentSession:', isCurrentSession);
 
-            if (isCronJob || isNewSession || isCurrentSession) {
+            if (isNewSession || isCurrentSession) {
               console.log('[WebSocket] Adding message to display');
               // Switch to this session and show message
-              setCurrentSession(displaySessionId);
+              setCurrentSession(sessionId);
 
               // Append to existing messages if already viewing this session, otherwise replace
-              if (isCurrentSession && !isCronJob) {
+              if (isCurrentSession) {
                 setMessages(prev => [...prev, {
                   id: message.id,
                   role: message.role,
@@ -919,12 +936,10 @@ function App() {
                   attachments: message.attachments || []
                 }]);
               }
-              // Refresh sessions list in background (only for non-cron sessions)
-              if (!isCronJob) {
-                fetchSessions();
-              }
+              // Refresh sessions list in background
+              fetchSessions();
               // Refresh notifications list for cron jobs
-              if (isCronJob) {
+              if (sessionId.startsWith('cron:')) {
                 fetchNotifications();
               }
             }
@@ -2156,20 +2171,6 @@ function App() {
         </div>
 
         <div className="flex-1 overflow-y-auto min-h-0">
-          {/* 固定的定时任务通知会话 */}
-          <button
-            onClick={() => {
-              setCurrentSession(CRON_NOTIFICATION_SESSION_ID);
-              setMessages([]); // 清空消息，点击时重新加载
-            }}
-            className={`w-full text-left px-4 py-3 flex items-center gap-2 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors ${
-              currentSession === CRON_NOTIFICATION_SESSION_ID ? 'bg-gray-100 dark:bg-gray-800' : ''
-            }`}
-          >
-            <Clock className="w-4 h-4 text-orange-500 flex-shrink-0" />
-            <span className="truncate flex-1 text-orange-600 dark:text-orange-400">{t('notification.cronNotification')}</span>
-          </button>
-
           {/* 星标会话分组 */}
           {sessions.some(s => s.starred) && (
             <>
@@ -2210,9 +2211,12 @@ function App() {
                     ? (selectedSessionIds.has(session.id)
                         ? <CheckSquare className="w-4 h-4 text-blue-500 flex-shrink-0" />
                         : <Square className="w-4 h-4 text-gray-400 flex-shrink-0" />)
-                    : <MessageCircle className="w-4 h-4 text-gray-500 flex-shrink-0" />
+                    : (() => {
+                        const IconComponent = getSessionIcon(session.platform);
+                        return <IconComponent className="w-4 h-4 text-gray-500 flex-shrink-0" />;
+                      })()
                   }
-                  <span className="truncate flex-1">{session.name}</span>
+                  <span className="truncate flex-1">{session.name || '(无标题)'}</span>
                   {!isSelectMode && (
                     <>
                       <Star
@@ -2263,9 +2267,12 @@ function App() {
                 ? (selectedSessionIds.has(session.id)
                     ? <CheckSquare className="w-4 h-4 text-blue-500 flex-shrink-0" />
                     : <Square className="w-4 h-4 text-gray-400 flex-shrink-0" />)
-                : <MessageCircle className="w-4 h-4 text-gray-500 flex-shrink-0" />
+                : (() => {
+                    const IconComponent = getSessionIcon(session.platform);
+                    return <IconComponent className="w-4 h-4 text-gray-500 flex-shrink-0" />;
+                  })()
               }
-              <span className="truncate flex-1">{session.name}</span>
+              <span className="truncate flex-1">{session.name || '(无标题)'}</span>
               {!isSelectMode && (
                 <>
                   <Star

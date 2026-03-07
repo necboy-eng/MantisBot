@@ -258,15 +258,31 @@ export async function createHTTPServer(options: HTTPServerOptions) {
   });
   app.get('/api/sessions', (_, res) => {
     const sessions = options.sessionManager.listSessions();
-    res.json(sessions.map(s => ({
-      id: s.id,
-      name: s.name,
-      model: s.model,
-      createdAt: s.createdAt,
-      updatedAt: s.updatedAt,
-      messageCount: s.messages.length,
-      starred: s.starred,
-    })));
+    res.json(sessions.map(s => {
+      // 检测会话的 platform（从第一条消息的 metadata 中获取）
+      let platform = 'web'; // 默认
+      const firstUserMessage = s.messages.find(m => m.role === 'user');
+      if (firstUserMessage?.metadata?.platform) {
+        platform = firstUserMessage.metadata.platform as string;
+      }
+
+      // 智能标题生成：如果没有 name，使用第一条用户消息的前 30 个字符
+      let displayName = s.name;
+      if (!displayName && firstUserMessage) {
+        displayName = firstUserMessage.content.substring(0, 30) + (firstUserMessage.content.length > 30 ? '...' : '');
+      }
+
+      return {
+        id: s.id,
+        name: displayName,
+        model: s.model,
+        createdAt: s.createdAt,
+        updatedAt: s.updatedAt,
+        messageCount: s.messages.length,
+        starred: s.starred,
+        platform, // 新增：渠道平台标识
+      };
+    }));
   });
 
   app.get('/api/sessions/:id', (req, res) => {
