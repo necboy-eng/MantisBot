@@ -23,6 +23,28 @@ export interface OAuthTokenResponse {
   expiresIn: number;
 }
 
+interface DeviceAuthResponse {
+  code: number;
+  msg: string;
+  data: {
+    device_code: string;
+    verification_uri: string;
+    user_code: string;
+    expires_in: number;
+    interval: number;
+  };
+}
+
+interface AccessTokenResponse {
+  code: number;
+  msg: string;
+  data: {
+    access_token: string;
+    refresh_token: string;
+    expires_in: number;
+  };
+}
+
 /**
  * 飞书 OAuth 设备流授权
  */
@@ -56,10 +78,10 @@ export class FeishuOAuth {
         }),
       });
 
-      const data = await response.json();
+      const data = await response.json() as DeviceAuthResponse;
 
       if (data.code !== 0) {
-        throw new Error(`获取设备码失败: ${data.msg}`);
+        throw new Error(`获取设备码失败：${data.msg}`);
       }
 
       const result = data.data;
@@ -123,7 +145,7 @@ export class FeishuOAuth {
           }),
         });
 
-        const data = await response.json();
+        const data = await response.json() as AccessTokenResponse;
 
         if (data.code === 99991663 || data.code === 99991402) {
           // 速率限制，等待后重试
@@ -154,7 +176,7 @@ export class FeishuOAuth {
 
         if (data.code !== 0) {
           // 其他错误
-          const errorMsg = data.msg || `错误码: ${data.code}`;
+          const errorMsg = data.msg || `错误码：${data.code}`;
           console.error('[FeishuOAuth] Poll error:', errorMsg);
           yield { status: 'error', message: errorMsg };
           return;

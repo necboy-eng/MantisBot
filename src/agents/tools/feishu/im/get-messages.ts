@@ -1,13 +1,13 @@
 // src/agents/tools/feishu/im/get-messages.ts
 
-import { Tool } from '../../../types.js';
 import { getFeishuClient } from '../client.js';
 import { withFeishuErrorHandling } from '../helpers.js';
+import type { Tool } from '@/types.js';
 
 /**
  * 排序规则转换
  */
-function sortRuleToSortType(rule?: string): string {
+function sortRuleToSortType(rule?: string): 'ByCreateTimeAsc' | 'ByCreateTimeDesc' {
   if (rule === 'create_time_asc') return 'ByCreateTimeAsc';
   if (rule === 'create_time_desc') return 'ByCreateTimeDesc';
   return 'ByCreateTimeDesc'; // 默认
@@ -91,7 +91,7 @@ export const getMessagesTool: Tool = {
       },
     },
   },
-  async execute(params, context) {
+  async execute(params: any, context: any) {
     return withFeishuErrorHandling(async () => {
       // 参数验证
       if (params.open_id && params.chat_id) {
@@ -115,8 +115,8 @@ export const getMessagesTool: Tool = {
           const p2pResponse = await client.request({
             method: 'POST',
             url: '/open-apis/im/v1/chat_p2p/batch_query',
-            body: { chatter_ids: [params.open_id] },
-            query: { user_id_type: 'open_id' },
+            data: { chatter_ids: [params.open_id] },
+            params: { user_id_type: 'open_id' },
           });
 
           if (p2pResponse.code !== 0 || !p2pResponse.data?.p2p_chats?.length) {
@@ -125,7 +125,7 @@ export const getMessagesTool: Tool = {
 
           chatId = p2pResponse.data.p2p_chats[0].chat_id;
         } catch (error: any) {
-          return { error: `解析单聊会话失败: ${error.message}` };
+          return { error: `解析单聊会话失败：${error.message}` };
         }
       }
 
@@ -141,7 +141,7 @@ export const getMessagesTool: Tool = {
         timeRange,
       });
 
-      // 调用飞书 API
+      // 调用飞书 API - 使用类型断言绕过 SDK 类型限制
       const response = await client.im.v1.message.list({
         params: {
           container_id_type: 'chat',
@@ -151,17 +151,20 @@ export const getMessagesTool: Tool = {
           sort_type: sortType,
           page_size: pageSize,
           page_token: params.page_token,
+        },
+        query: {
+          user_id_type: 'open_id',
           card_msg_content_type: 'raw_card_content',
         },
-        query: { user_id_type: 'open_id' },
-        as: 'user', // 尝试以用户身份调用
-      });
+        // @ts-ignore - 飞书 SDK 支持 as 参数用于用户身份调用
+        as: 'user',
+      } as any);
 
       if (response.code !== 0) {
-        return { error: response.msg || `错误码: ${response.code}` };
+        return { error: response.msg || `错误码：${response.code}` };
       }
 
-      const data = response.data;
+      const data = response.data as any;
 
       console.log('[FeishuIM] Retrieved messages:', {
         count: data.items?.length || 0,

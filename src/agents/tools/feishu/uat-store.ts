@@ -6,7 +6,7 @@ import { join } from 'path';
 /**
  * UAT 令牌存储
  */
-interface UATToken {
+export interface UATToken {
   accessToken: string;
   refreshToken: string;
   expiresAt: number;

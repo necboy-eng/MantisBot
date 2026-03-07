@@ -179,14 +179,23 @@ export const FeishuConfigSchema = z.object({
     deviceCodeTTL: z.number().default(300), // 设备码有效期（秒）
     pollInterval: z.number().default(3000), // 轮询间隔（毫秒）
     maxPollAttempts: z.number().default(60), // 最大轮询次数
-  }).default({}),
+  }).default({
+    enabled: true,
+    deviceCodeTTL: 300,
+    pollInterval: 3000,
+    maxPollAttempts: 60,
+  }),
 
   // 流式卡片配置
   streaming: z.object({
     enabled: z.boolean().default(true), // 是否启用流式卡片
     updateInterval: z.number().default(500), // 更新间隔（毫秒）
     showThinking: z.boolean().default(true), // 是否显示"思考中"状态
-  }).default({}),
+  }).default({
+    enabled: true,
+    updateInterval: 500,
+    showThinking: true,
+  }),
 
   // 工具权限配置
   permissions: z.object({
@@ -194,32 +203,53 @@ export const FeishuConfigSchema = z.object({
     im: z.object({
       enabled: z.boolean().default(true),
       requireUAT: z.boolean().default(true), // 是否需要用户授权
-    }).default({}),
+    }).default({
+      enabled: true,
+      requireUAT: true,
+    }),
 
     // 文档操作权限
     doc: z.object({
       enabled: z.boolean().default(true),
       requireUAT: z.boolean().default(true),
-    }).default({}),
+    }).default({
+      enabled: true,
+      requireUAT: true,
+    }),
 
     // Bitable 权限
     bitable: z.object({
       enabled: z.boolean().default(true),
       requireUAT: z.boolean().default(false), // Bot 可以访问
-    }).default({}),
+    }).default({
+      enabled: true,
+      requireUAT: false,
+    }),
 
     // 任务管理权限
     task: z.object({
       enabled: z.boolean().default(true),
       requireUAT: z.boolean().default(false),
-    }).default({}),
+    }).default({
+      enabled: true,
+      requireUAT: false,
+    }),
 
     // 日历权限
     calendar: z.object({
       enabled: z.boolean().default(true),
       requireUAT: z.boolean().default(true),
-    }).default({}),
-  }).default({}),
+    }).default({
+      enabled: true,
+      requireUAT: true,
+    }),
+  }).default({
+    im: { enabled: true, requireUAT: true },
+    doc: { enabled: true, requireUAT: true },
+    bitable: { enabled: true, requireUAT: false },
+    task: { enabled: true, requireUAT: false },
+    calendar: { enabled: true, requireUAT: true },
+  }),
 });
 
 export const SlackConfigSchema = z.object({

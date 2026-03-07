@@ -2,7 +2,7 @@
 
 import * as lark from '@larksuiteoapi/node-sdk';
 import { getConfig } from '../../../config/loader.js';
-import { getUATStore, type UATToken } from './uat-store.js';
+import { getUATStore } from './uat-store.js';
 
 /**
  * 飞书 SDK 客户端管理器
@@ -78,7 +78,7 @@ class FeishuClientManager {
 
     console.log(`[FeishuClient] Creating user client for userId=${userId}`);
 
-    // 创建用户客户端
+    // 创建用户客户端（使用 UAT 令牌）
     const userClient = new lark.Client({
       appId: feishuConfig.appId,
       appSecret: feishuConfig.appSecret,
@@ -87,8 +87,8 @@ class FeishuClientManager {
       loggerLevel: feishuConfig.debug ? lark.LoggerLevel.debug : lark.LoggerLevel.info,
     });
 
-    // 设置 UAT 令牌
-    userClient.setAccessToken(uat.accessToken);
+    // 设置 UAT 令牌 - 使用 userAccessToken 属性
+    (userClient as any).userAccessToken = uat.accessToken;
 
     // 缓存客户端
     this.userClients.set(userId, userClient);

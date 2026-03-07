@@ -94,8 +94,8 @@ export class FeishuChannel implements IChannel {
    */
   async *sendWithStream(
     chatId: string,
-    userId?: string,
-    generator: AsyncGenerator<{ type: 'text' | 'done', content?: string, files?: any[] }>
+    generator: AsyncGenerator<{ type: 'text' | 'done', content?: string, files?: any[] }>,
+    userId?: string
   ): AsyncGenerator<void> {
     const config = getConfig();
     const feishuConfig = (config.channels as any)?.feishu;

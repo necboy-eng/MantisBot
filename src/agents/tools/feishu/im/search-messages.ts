@@ -1,8 +1,8 @@
 // src/agents/tools/feishu/im/search-messages.ts
 
-import { Tool } from '../../../types.js';
 import { getFeishuClient } from '../client.js';
 import { withFeishuErrorHandling } from '../helpers.js';
+import type { Tool } from '@/types.js';
 
 /**
  * 解析时间参数
@@ -98,7 +98,7 @@ export const searchMessagesTool: Tool = {
       },
     },
   },
-  async execute(params, context) {
+  async execute(params: any, context: any) {
     return withFeishuErrorHandling(async () => {
       const client = await getFeishuClient(context?.userId);
 
@@ -153,23 +153,25 @@ export const searchMessagesTool: Tool = {
         timeRange: searchTime,
       });
 
-      // 1. 搜索消息 ID
+      // 1. 搜索消息 ID - 使用类型断言绕过 SDK 类型限制
       const searchResponse = await client.search.message.create({
         data: searchData,
         params: {
           user_id_type: 'open_id',
           page_size: pageSize,
           page_token: params.page_token,
+        },
+        query: {
           start_time: searchTime.start,
           end_time: searchTime.end,
         },
-      });
+      } as any);
 
       if (searchResponse.code !== 0) {
-        return { error: searchResponse.msg || `错误码: ${searchResponse.code}` };
+        return { error: searchResponse.msg || `错误码：${searchResponse.code}` };
       }
 
-      const searchDataResult = searchResponse.data;
+      const searchDataResult = searchResponse.data as any;
       const messageIds = searchDataResult.items || [];
       const hasMore = searchDataResult.has_more || false;
       const pageToken = searchDataResult.page_token;
@@ -182,28 +184,29 @@ export const searchMessagesTool: Tool = {
       if (messageIds.length === 0) {
         return {
           messages: [],
-          has_more,
+          has_more: hasMore,
           page_token: pageToken,
         };
       }
 
       // 2. 批量获取消息详情
       const queryStr = messageIds
-        .map((id) => `message_ids=${encodeURIComponent(id)}`)
+        .map((id: any) => `message_ids=${encodeURIComponent(id)}`)
         .join('&');
 
       const mgetResponse = await client.request({
         method: 'GET',
         url: `/open-apis/im/v1/messages/mget?${queryStr}`,
-        query: {
+        params: {
           user_id_type: 'open_id',
           card_msg_content_type: 'raw_card_content',
         },
+        // @ts-ignore - 飞书 SDK 支持 as 参数用于用户身份调用
         as: 'user',
-      });
+      } as any);
 
       if (mgetResponse.code !== 0) {
-        return { error: mgetResponse.msg || `错误码: ${mgetResponse.code}` };
+        return { error: mgetResponse.msg || `错误码：${mgetResponse.code}` };
       }
 
       const items = mgetResponse.data?.items || [];
@@ -216,10 +219,11 @@ export const searchMessagesTool: Tool = {
           const chatResponse = await client.request({
             method: 'POST',
             url: '/open-apis/im/v1/chats/batch_query',
-            body: { chat_ids: chatIds },
-            query: { user_id_type: 'open_id' },
+            data: { chat_ids: chatIds },
+            params: { user_id_type: 'open_id' },
+            // @ts-ignore - 飞书 SDK 支持 as 参数用于用户身份调用
             as: 'user',
-          });
+          } as any);
 
           if (chatResponse.code === 0) {
             for (const chat of chatResponse.data?.items || []) {
@@ -279,7 +283,7 @@ export const searchMessagesTool: Tool = {
 
       return {
         messages,
-        has_more,
+        has_more: hasMore,
         page_token: pageToken,
       };
     }, 'feishu_im_user_search_messages');

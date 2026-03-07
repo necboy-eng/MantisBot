@@ -1,13 +1,13 @@
 // src/agents/tools/feishu/im/get-thread-messages.ts
 
-import { Tool } from '../../../types.js';
 import { getFeishuClient } from '../client.js';
 import { withFeishuErrorHandling } from '../helpers.js';
+import type { Tool } from '@/types.js';
 
 /**
  * 排序规则转换
  */
-function sortRuleToSortType(rule?: string): string {
+function sortRuleToSortType(rule?: string): 'ByCreateTimeAsc' | 'ByCreateTimeDesc' {
   if (rule === 'create_time_asc') return 'ByCreateTimeAsc';
   if (rule === 'create_time_desc') return 'ByCreateTimeDesc';
   return 'ByCreateTimeDesc'; // 默认
@@ -50,7 +50,7 @@ export const getThreadMessagesTool: Tool = {
     },
     required: ['thread_id'],
   },
-  async execute(params, context) {
+  async execute(params: any, context: any) {
     return withFeishuErrorHandling(async () => {
       const client = await getFeishuClient(context?.userId);
       const sortType = sortRuleToSortType(params.sort_rule);
@@ -62,7 +62,7 @@ export const getThreadMessagesTool: Tool = {
         pageSize,
       });
 
-      // 调用飞书 API
+      // 调用飞书 API - 使用类型断言绕过 SDK 类型限制
       const response = await client.im.v1.message.list({
         params: {
           container_id_type: 'thread',
@@ -70,17 +70,20 @@ export const getThreadMessagesTool: Tool = {
           sort_type: sortType,
           page_size: pageSize,
           page_token: params.page_token,
+        },
+        query: {
+          user_id_type: 'open_id',
           card_msg_content_type: 'raw_card_content',
         },
-        query: { user_id_type: 'open_id' },
-        as: 'user', // 尝试以用户身份调用
-      });
+        // @ts-ignore - 飞书 SDK 支持 as 参数用于用户身份调用
+        as: 'user',
+      } as any);
 
       if (response.code !== 0) {
-        return { error: response.msg || `错误码: ${response.code}` };
+        return { error: response.msg || `错误码：${response.code}` };
       }
 
-      const data = response.data;
+      const data = response.data as any;
 
       console.log('[FeishuIM] Retrieved thread messages:', {
         threadId: params.thread_id,

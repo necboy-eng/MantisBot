@@ -104,7 +104,7 @@ export interface ToolInfo {
 }
 
 export interface Tool extends ToolInfo {
-  execute: (params: Record<string, unknown>) => Promise<unknown>;
+  execute: (params: Record<string, unknown>, context?: Record<string, unknown>) => Promise<unknown>;
 }
 
 export interface ToolResult {
