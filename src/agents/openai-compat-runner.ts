@@ -567,7 +567,22 @@ export class OpenAICompatRunner extends EventEmitter {
     const currentCwd = workDirManager.getCurrentWorkDir();
     const dirContext = workDirManager.getWorkDirContext();
     const basePrompt = this.options.systemPrompt || '';
-    const rememberInstruction = `\n\n## 记忆工具\n你有一个 \`remember\` 工具，仅在学到对未来对话有价值的信息时调用：\n- 用户偏好（编码风格、语言偏好、沟通方式）\n- 项目关键事实（技术栈、架构决策、环境信息）\n- 重要决策（用户做出的选择，如"暂不引入 Redis"）\n- 个人上下文（姓名、时区、角色）\n\n不要调用 remember 记录：普通问答、解释说明、调试步骤、或仅与当前任务相关的临时信息。`;
+    const rememberInstruction = `\n\n## 记忆使用规范
+你拥有用户的历史记忆信息，但请遵守以下规则：
+1. **不要主动复述**：除非用户明确询问（如"你知道我是谁吗"），否则不要复述记忆中的个人信息
+2. **隐式使用**：将记忆作为上下文背景，自然地融入回答，而非单独列出
+3. **仅回答相关问题**：只有当用户问题与记忆直接相关时，才引用记忆内容
+4. **避免过度联想**：简单的问候（如"你好"、"早上好"）不需要触发记忆中的身份信息
+5. **保持自然**：使用记忆时，像普通人聊天一样自然提及，不要像读档案一样
+
+## 记忆工具
+你有一个 \`remember\` 工具，仅在学到对未来对话有价值的信息时调用：
+- 用户偏好（编码风格、语言偏好、沟通方式）
+- 项目关键事实（技术栈、架构决策、环境信息）
+- 重要决策（用户做出的选择，如"暂不引入 Redis"）
+- 个人上下文（姓名、时区、角色）
+
+不要调用 remember 记录：普通问答、解释说明、调试步骤、或仅与当前任务相关的临时信息。`;
 
     // 构建系统提示词：工作目录 + 目录结构上下文
     let systemContent = `${basePrompt}\n\n## 当前工作目录\n${currentCwd}`;

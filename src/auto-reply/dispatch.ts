@@ -140,11 +140,12 @@ export class MessageDispatcher {
       // Search relevant memories
       console.log('[Dispatch] Searching memories for:', content.substring(0, 50));
       const memories = await this.memoryManager.searchHybrid('default', content, {
-        limit: 7,
+        limit: 3,        // 减少到 3 条，避免上下文污染
+        minScore: 0.35,  // 提高阈值，过滤低相关度记忆
         sessionKey: undefined
       });
       console.log(`[Dispatch] Found ${memories.length} memories:`,
-        memories.map(m => m.content.substring(0, 30)));
+        memories.map(m => `${m.content.substring(0, 30)}... (score: ${m.score?.toFixed(3)})`));
 
       // Build prompt with memory context
       let prompt: string;
@@ -153,7 +154,7 @@ export class MessageDispatcher {
           `${i + 1}. ${m.content}`
         ).join('\n');
 
-        prompt = `📋 **相关记忆**（请在回答前先参考这些信息）：
+        prompt = `📋 **相关记忆**（仅在记忆与用户问题直接相关时才参考）：
 ${memoryContext}
 
 ---
@@ -161,7 +162,7 @@ ${memoryContext}
 💬 **用户问题**：
 ${content}
 
-💡 **提示**：请先查看上面的相关记忆，然后回答用户问题。如果记忆中有相关信息，请直接使用。`;
+`;
       } else {
         prompt = content;
       }
@@ -259,10 +260,14 @@ ${content}
       }
 
       // Search relevant memories
+      console.log('[DispatchStream] Searching memories for:', content.substring(0, 50));
       const memories = await this.memoryManager.searchHybrid('default', content, {
-        limit: 7,
+        limit: 3,        // 减少到 3 条，避免上下文污染
+        minScore: 0.35,  // 提高阈值，过滤低相关度记忆
         sessionKey: undefined
       });
+      console.log(`[DispatchStream] Found ${memories.length} memories:`,
+        memories.map(m => `${m.content.substring(0, 30)}... (score: ${m.score?.toFixed(3)})`));
 
       // Build prompt with memory context
       let prompt: string;
@@ -271,7 +276,7 @@ ${content}
           `${i + 1}. ${m.content}`
         ).join('\n');
 
-        prompt = `📋 **相关记忆**（请在回答前先参考这些信息）：
+        prompt = `📋 **相关记忆**（仅在记忆与用户问题直接相关时才参考）：
 ${memoryContext}
 
 ---
@@ -279,7 +284,7 @@ ${memoryContext}
 💬 **用户问题**：
 ${content}
 
-💡 **提示**：请先查看上面的相关记忆，然后回答用户问题。如果记忆中有相关信息，请直接使用。`;
+`;
       } else {
         prompt = content;
       }
