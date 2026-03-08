@@ -11,6 +11,7 @@ import { EmailConfigSection } from './EmailConfigSection';
 import { AuthSettingsSection } from './AuthSettingsSection';
 import { FirecrawlSettingsSection } from './FirecrawlSettingsSection';
 import { AgentTeamsSection } from './AgentTeamsSection';
+import { PluginManagementSection } from './PluginManagementSection';
 import { InstallSkillModal } from './InstallSkillModal';
 import { authFetch } from '../utils/auth';
 import { invalidateAllCache } from '../utils/configCache';
@@ -35,7 +36,7 @@ export function SettingsPanel({ isOpen, onClose }: SettingsPanelProps) {
   const [loading, setLoading] = useState(false);
   const [reloading, setReloading] = useState(false);
   const [downloadingSkills, setDownloadingSkills] = useState<Set<string>>(new Set());
-  const [activeTab, setActiveTab] = useState<'skills' | 'models' | 'profiles' | 'evolutions' | 'paths' | 'channels' | 'email' | 'auth' | 'firecrawl' | 'teams'>('models');
+  const [activeTab, setActiveTab] = useState<'skills' | 'models' | 'profiles' | 'evolutions' | 'paths' | 'channels' | 'email' | 'auth' | 'firecrawl' | 'teams' | 'plugins'>('models');
   const [activeProfile, setActiveProfile] = useState('default');
   const [installModalOpen, setInstallModalOpen] = useState(false);
   const [reloadingConfig, setReloadingConfig] = useState(false);
@@ -305,7 +306,17 @@ export function SettingsPanel({ isOpen, onClose }: SettingsPanelProps) {
                   : 'text-gray-500 border-transparent hover:text-gray-700'
               }`}
             >
-              Agent Teams
+              {t('settings.teams') || '团队'}
+            </button>
+            <button
+              onClick={() => setActiveTab('plugins')}
+              className={`pb-3 text-sm font-medium border-b-2 transition-colors ${
+                activeTab === 'plugins'
+                  ? 'text-primary-600 border-primary-600'
+                  : 'text-gray-500 border-transparent hover:text-gray-700'
+              }`}
+            >
+              {t('settings.plugins') || '插件'}
             </button>
           </div>
         </div>
@@ -347,6 +358,8 @@ export function SettingsPanel({ isOpen, onClose }: SettingsPanelProps) {
           <FirecrawlSettingsSection />
         ) : activeTab === 'teams' ? (
           <AgentTeamsSection />
+        ) : activeTab === 'plugins' ? (
+          <PluginManagementSection />
         ) : (
           <EvolutionSection />
         )}

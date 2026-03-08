@@ -4,6 +4,8 @@ import { EventEmitter } from 'events';
 import { loadClaudeSdk } from './claude-sdk.js';
 import { ToolRegistry } from './tools/registry.js';
 import type { SkillsLoader } from './skills/loader.js';
+import { formatSkillsForPrompt } from '@mariozechner/pi-coding-agent';
+import { getGlobalPluginLoader } from '../plugins/loader.js';
 import type { ToolInfo } from '../types.js';
 import type { LLMMessage, FileAttachment } from '../types.js';
 import type { PermissionResult } from '@anthropic-ai/claude-agent-sdk';
@@ -25,7 +27,6 @@ export interface ClaudeAgentRunnerOptions {
   autoApprove?: boolean;  // 是否自动批准所有工具调用（向后兼容）
   approvalMode?: ApprovalMode;  // 审批模式：auto=自动批准所有, ask=每次询问, dangerous=仅危险操作询问
   skillsLoader?: SkillsLoader;  // Skills 加载器
-  pluginSkillsPrompt?: string;  // Plugin skills 提示词（来自 plugins 目录）
   cwd?: string;  // 工作目录
   claudeSessionId?: string;  // 用于 resume 的会话 ID
   /** 激活的 Agent 团队配置（仅 Claude SDK 支持） */
@@ -170,6 +171,7 @@ function truncateToolResult(content: string): string {
  * 1. { attachments: FileAttachment[] } - send_file 工具返回
  * 2. { url, name } - 单个附件
  * 3. { image, mimeType } - base64 图片（如 browser_screenshot），会保存到文件
+ * 4. { filePath/fileUrl, previewHtml } - infographic 工具返回
  */
 function collectAttachments(result: unknown, attachments: FileAttachment[]): void {
   if (result && typeof result === 'object') {
@@ -226,6 +228,24 @@ function collectAttachments(result: unknown, attachments: FileAttachment[]): voi
         // 保存失败时跳过这个附件
       }
     }
+    // 6. 检查是否是 infographic 工具返回（filePath/fileUrl + previewHtml）
+    else if (('filePath' in resultObj || 'fileUrl' in resultObj) && 'previewHtml' in resultObj) {
+      const fileUrl = (resultObj.filePath || resultObj.fileUrl) as string;
+      // 从 previewHtml 中提取文件名或标题
+      const previewHtml = resultObj.previewHtml as string;
+      const titleMatch = previewHtml?.match(/<title>([^<]+)<\/title>/);
+      const fileName = titleMatch ? titleMatch[1].trim() + '.html' : 'infographic.html';
+      const timestamp = Date.now();
+
+      console.log('[collectAttachments] Detected infographic:', fileUrl);
+      newItems = [{
+        id: `infographic-${timestamp}`,
+        name: fileName,
+        url: fileUrl,
+        mimeType: 'text/html',
+        size: 0,  // 大小未知
+      } as FileAttachment];
+    }
 
     const existingUrls = new Set(attachments.map(a => a.url));
     for (const item of newItems) {
@@ -249,7 +269,6 @@ function collectAttachments(result: unknown, attachments: FileAttachment[]): voi
 export class ClaudeAgentRunner extends EventEmitter {
   private toolRegistry: ToolRegistry;
   private skillsLoader?: SkillsLoader;
-  private pluginSkillsPrompt?: string;  // Plugin skills 提示词
   private options: {
     model: string;
     systemPrompt: string;
@@ -298,7 +317,6 @@ export class ClaudeAgentRunner extends EventEmitter {
     super();
     this.toolRegistry = toolRegistry;
     this.skillsLoader = options.skillsLoader;
-    this.pluginSkillsPrompt = options.pluginSkillsPrompt;  // 保存 plugin skills
     this.claudeSessionId = options.claudeSessionId || null;
 
     // 兼容旧的 autoApprove 参数，转换为 approvalMode
@@ -625,22 +643,35 @@ export class ClaudeAgentRunner extends EventEmitter {
 
     // 加载 Skills 提示词（如果提供了 skillsLoader）
     // Agent Team 激活时跳过：协调者不直接执行技能，skills 由各子 agent 自身携带
-    if (this.skillsLoader && !this.options.activeTeam) {
+    if (!this.options.activeTeam) {
       const config = getConfig();
       const enabledSkills = config.enabledSkills || [];
-      const skillsPrompt = this.skillsLoader.getPromptContent(enabledSkills);
-      if (skillsPrompt) {
-        console.log('[ClaudeAgentRunner] Loaded skills, adding to system prompt');
+
+      // 获取 standalone skill 对象（按 enabledSkills 过滤）
+      const standaloneSkillObjs = this.skillsLoader
+        ? this.skillsLoader.list().map(ls => ls.skill).filter(s => enabledSkills.includes(s.name))
+        : [];
+
+      // 获取 plugin skills
+      const pluginSkills = getGlobalPluginLoader()?.getSkills() || [];
+      const formattedPluginSkills = pluginSkills.map(s => ({
+        name: s.name,
+        description: s.description,
+        filePath: s.filePath,
+        baseDir: '',
+        source: `plugin:${s.pluginName}`,
+        disableModelInvocation: false,
+      }));
+
+      // 合并后统一格式化为单个 <available_skills> 块
+      const allSkills = [...standaloneSkillObjs, ...formattedPluginSkills];
+      if (allSkills.length > 0) {
+        const skillsPrompt = formatSkillsForPrompt(allSkills);
+        console.log(`[ClaudeAgentRunner] Injecting ${standaloneSkillObjs.length} standalone + ${formattedPluginSkills.length} plugin skills`);
         systemPrompt = `${systemPrompt}\n\n${skillsPrompt}`;
       }
-    } else if (this.options.activeTeam) {
+    } else {
       console.log('[ClaudeAgentRunner] Skipping skills injection (Agent Team active, orchestrator delegates to subagents)');
-    }
-
-    // 添加 Plugin skills 提示词（同样在 Agent Team 激活时跳过）
-    if (this.pluginSkillsPrompt && !this.options.activeTeam) {
-      console.log('[ClaudeAgentRunner] Loaded plugin skills, adding to system prompt');
-      systemPrompt = `${systemPrompt}\n\n${this.pluginSkillsPrompt}`;
     }
 
     // 构建 MCP 工具 - 只保留 MCP_ONLY_TOOLS 中的工具

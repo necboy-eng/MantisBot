@@ -533,6 +533,8 @@ export const ConfigSchema = z.object({
   enabledSkills: z.array(z.string()).optional().default([]),
   // 已废弃：使用 enabledSkills 代替
   disabledSkills: z.array(z.string()).optional().default([]),
+  // 禁用的外部插件列表（plugins/目录下的插件）
+  disabledPlugins: z.array(z.string()).optional().default([]),
   // Agent 性格配置
   activeProfile: z.string().optional().default('default'),
   // 存储配置

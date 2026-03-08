@@ -81,7 +81,6 @@ export class UnifiedAgentRunner extends EventEmitter implements IAgentRunner {
       console.log(`[UnifiedRunner] Using ClaudeAgentRunner for model: ${options.model}`);
       this.claudeRunner = new ClaudeAgentRunner(toolRegistry, {
         ...options,
-        pluginSkillsPrompt: options.pluginSkillsPrompt,  // 传递 plugin skills
       });
       this.runner = this.claudeRunner;
 

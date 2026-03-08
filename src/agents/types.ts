@@ -64,7 +64,6 @@ export interface AgentRunnerOptions {
   autoApprove?: boolean;               // 是否自动批准所有工具调用（向后兼容）
   approvalMode?: ApprovalMode;         // 审批模式：auto=自动批准所有, ask=每次询问, dangerous=仅危险操作询问
   skillsLoader?: any;                  // Skills 加载器
-  pluginSkillsPrompt?: string;         // Plugin skills 提示词（来自 plugins 目录）
   cwd?: string;                        // 工作目录
   claudeSessionId?: string;            // 用于 resume 的会话 ID（仅 Claude SDK）
   abortSignal?: AbortSignal;           // 用于中断执行的信号

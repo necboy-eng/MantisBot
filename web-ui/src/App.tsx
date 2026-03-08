@@ -286,6 +286,7 @@ function App() {
   const [approvalMode, setApprovalMode] = useState<ApprovalMode>('dangerous');  // 审批模式，默认仅危险操作询问
   const [starredExpanded, setStarredExpanded] = useState(true);  // 星标分组是否展开
   const [canvasOpen, setCanvasOpen] = useState(() => window.innerWidth >= 768);
+  const [infographicSyntax, setInfographicSyntax] = useState<string | undefined>(undefined);
   const [currentFile, setCurrentFile] = useState<FileItem | null>(null);
   const [cronOpen, setCronOpen] = useState(false);
   const [tunnelOpen, setTunnelOpen] = useState(false);
@@ -1420,6 +1421,13 @@ function App() {
     setCanvasOpen(true);
   }
 
+  // 处理信息图检测 - 打开画布并显示信息图
+  function handleInfographicDetected(syntax: string) {
+    setInfographicSyntax(syntax);
+    setCanvasOpen(true);
+    setCanvasForceMode('preview');  // 使用预览模式显示信息图
+  }
+
   // 处理权限请求响应
   async function handlePermissionRespond(approved: boolean, updatedInput?: Record<string, unknown>) {
     if (!pendingPermission || !currentSession) {
@@ -2535,6 +2543,7 @@ function App() {
                   getToolDisplayName={getToolDisplayName}
                   formatToolArgs={formatToolArgs}
                   FileAttachmentCard={FileAttachmentCard}
+                  onInfographicDetected={handleInfographicDetected}
                 />
               ))}
             </div>
@@ -2765,6 +2774,7 @@ function App() {
           onEmailTabOpen={() => setEmailUnreadCount(0)}
           incomingEmails={incomingEmails}
           onIncomingEmailsConsumed={() => setIncomingEmails([])}
+          infographicSyntax={infographicSyntax}
         />
       </div>
 

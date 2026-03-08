@@ -107,6 +107,7 @@ export function getDefaultConfig(): Config {
       'brainstorming',
     ],
     disabledSkills: [],
+    disabledPlugins: [],
     activeProfile: 'default',
     agentTeams: [],
   } as Config;

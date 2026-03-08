@@ -22,12 +22,12 @@ import { ToolRegistry } from './agents/tools/registry.js';
 import { UnifiedAgentRunner, type IAgentRunner } from './agents/unified-runner.js';
 import { SkillsLoader } from './agents/skills/loader.js';
 import { setSkillsLoader } from './agents/tools/read-skill.js';
-import { setSkillsPrompt } from './agents/llm-client.js';
+import { refreshSkillsPrompt } from './agents/llm-client.js';
 import { CronService } from './cron/service.js';
 import { CronExecutor } from './cron/executor.js';
 import { createCronManageTool } from './agents/tools/cron-manage.js';
 import { TunnelManager } from './tunnel/index.js';
-import { PluginLoader } from './plugins/loader.js';
+import { PluginLoader, setGlobalPluginLoader } from './plugins/loader.js';
 // 错误处理组件导入
 import { GlobalErrorHandler } from './reliability/global-error-handler.js';
 import { CircuitBreaker } from './reliability/circuit-breaker.js';
@@ -148,25 +148,23 @@ export async function main(): Promise<void> {
   // Load plugins
   let pluginLoader: PluginLoader | undefined;
   try {
-    pluginLoader = new PluginLoader('./plugins');
+    pluginLoader = new PluginLoader('./plugins', config.disabledPlugins || []);
     await pluginLoader.loadAll();
     console.log(`[MantisBot] Loaded ${pluginLoader.getAllPlugins().length} plugins`);
     console.log(`[MantisBot] Loaded ${pluginLoader.getSkills().length} plugin skills`);
+    // 设置全局 PluginLoader 引用（供 toggle 后刷新 skills prompt 使用）
+    setGlobalPluginLoader(pluginLoader);
   } catch (error) {
     console.warn('[MantisBot] Plugin loading failed, continuing without plugins:', error);
   }
 
-  // Set skills prompt for LLM (include plugin skills)
-  // 默认禁用所有 skills，只有在 enabledSkills 中列出的才会启用
-  const enabledSkills = config.enabledSkills || [];
-  const standaloneSkillsPrompt = skillsLoader.getPromptContent(enabledSkills);
-  const pluginSkillsPrompt = pluginLoader?.getSkills().map(s => s.content).join('\n\n') || '';
-  const combinedSkillsPrompt = standaloneSkillsPrompt + (pluginSkillsPrompt ? '\n\n' + pluginSkillsPrompt : '');
-  setSkillsPrompt(combinedSkillsPrompt);
-  console.log(`[MantisBot] Skills prompt length: ${combinedSkillsPrompt.length} chars`);
-
-  // Set skills loader for read_skill tool
+  // Set skills loader for read_skill tool (必须在 refreshSkillsPrompt 之前)
   setSkillsLoader(skillsLoader);
+
+  // Set skills prompt for LLM (include plugin skills)
+  // 使用 refreshSkillsPrompt 统一处理 standalone 和 plugin skills
+  refreshSkillsPrompt();
+  console.log(`[MantisBot] Skills prompt refreshed (${pluginLoader?.getSkills().length || 0} plugin skills)`);
 
   // Initialize self-improving hooks (错误检测 & 学习提醒)
   await ensureLearningsDir();
@@ -177,12 +175,9 @@ export async function main(): Promise<void> {
   console.log('[MantisBot] Self-improving hooks registered');
 
   // Create UnifiedAgentRunner (shared by AutoReply and CronExecutor)
-  // 使用统一入口，根据模型类型自动选择 ClaudeAgentRunner 或 OpenAICompatRunner
-  // 注意：pluginSkillsPrompt 已在上面定义，用于同时传递给 LLMClient 和 ClaudeAgentRunner
   const agentRunner = new UnifiedAgentRunner(toolRegistry, {
-    maxIterations: 50,           // 保留迭代上限（防止无限循环）
-    skillsLoader,                // 传递 skillsLoader 以支持 Skills
-    pluginSkillsPrompt,          // 传递 plugin skills 提示词
+    maxIterations: 50,
+    skillsLoader,
   });
 
   // Initialize CronService
@@ -192,7 +187,6 @@ export async function main(): Promise<void> {
     sessionManager,
     toolRegistry,
     skillsLoader,
-    pluginSkillsPrompt,
     defaultModel: config.defaultModel || config.models[0]?.name,
   });
 

@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { homedir } from 'os';
+import { getConfig } from '../../config/loader.js';
 import { getFileStorage } from '../../files/index.js';
 import type { Tool, FileAttachment } from '../../types.js';
 
@@ -40,6 +41,28 @@ function getMimeType(filename: string): string {
     '.zip': 'application/zip',
   };
   return mimeTypes[ext] || 'application/octet-stream';
+}
+
+/**
+ * 检查路径是否安全
+ */
+function isPathSafe(filepath: string): boolean {
+  const config = getConfig();
+  const allowedPaths = config.allowedPaths || [];
+  const homeDir = homedir();
+
+  const resolved = path.resolve(filepath);
+
+  // 检查配置允许的路径
+  for (const allowedPath of allowedPaths) {
+    if (resolved.startsWith(allowedPath)) {
+      return true;
+    }
+  }
+
+  // 默认允许用户目录和 /tmp
+  const isTmp = resolved.startsWith('/tmp/') || resolved.startsWith('/private/tmp/');
+  return resolved.startsWith(homeDir) || isTmp;
 }
 
 /**
@@ -112,11 +135,9 @@ export const sendFileTool: Tool = {
 
         const expandedPath = expandPath(file.path);
 
-        // 安全检查：只允许用户目录或 /tmp（临时文件）
-        const homeDir = homedir();
-        const isTmp = expandedPath.startsWith('/tmp/') || expandedPath.startsWith('/private/tmp/');
-        if (!expandedPath.startsWith(homeDir) && !isTmp) {
-          errors.push(`安全限制：只能发送用户目录或 /tmp 下的文件，跳过: ${file.path}`);
+        // 安全检查
+        if (!isPathSafe(expandedPath)) {
+          errors.push(`安全限制：只能发送用户目录、/tmp 或 allowedPaths 配置中的文件，跳过: ${file.path}`);
           continue;
         }
 

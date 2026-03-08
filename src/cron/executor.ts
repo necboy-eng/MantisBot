@@ -11,7 +11,6 @@ export interface CronExecutorDeps {
   sessionManager: SessionManager;
   toolRegistry: ToolRegistry;
   skillsLoader: SkillsLoader;
-  pluginSkillsPrompt: string;
   defaultModel?: string;
 }
 
@@ -35,19 +34,15 @@ export class CronExecutor {
       } else if (payload.kind === 'agentTurn') {
         const sessionId = this.getOrCreateSession(job);
 
-        // 按任务配置构建 skillsPrompt（空列表 = 禁用所有）
-        const enabledSkills = payload.skills ?? [];
-        const standalonePrompt = this.deps.skillsLoader.getPromptContent(enabledSkills);
-        const skillsPrompt = standalonePrompt +
-          (this.deps.pluginSkillsPrompt ? '\n\n' + this.deps.pluginSkillsPrompt : '');
-
         // 为每次执行创建独立 runner，使用任务指定的模型
+        // skills 过滤在 runner 内部通过 getConfig().enabledSkills 处理
         const runner = new UnifiedAgentRunner(this.deps.toolRegistry, {
           model: payload.model || this.deps.defaultModel,
           maxIterations: 50,
-          pluginSkillsPrompt: skillsPrompt,
+          skillsLoader: this.deps.skillsLoader,
         });
 
+        const enabledSkills = payload.skills ?? [];
         console.log(`[CronExecutor] Job ${job.id}: model=${payload.model || this.deps.defaultModel}, skills=${enabledSkills.join(',') || 'none'}`);
 
         const response = await runner.run(payload.message, []);

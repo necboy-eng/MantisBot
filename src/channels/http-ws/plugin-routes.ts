@@ -2,6 +2,8 @@
 
 import { Express, Request, Response } from 'express';
 import { PluginLoader } from '../../plugins/loader.js';
+import { getConfig, saveConfig } from '../../config/loader.js';
+import { refreshSkillsPrompt } from '../../agents/llm-client.js';
 
 export function createPluginRoutes(app: Express, pluginLoader: PluginLoader): void {
   // GET /api/plugins - List all plugins
@@ -12,7 +14,9 @@ export function createPluginRoutes(app: Express, pluginLoader: PluginLoader): vo
         name: p.name,
         version: p.manifest.version,
         description: p.manifest.description,
-        author: p.manifest.author,
+        author: typeof p.manifest.author === 'string'
+          ? p.manifest.author
+          : p.manifest.author?.name,
         enabled: p.enabled,
         skillsCount: p.skills.length,
         commandsCount: p.commands.length,
@@ -102,7 +106,28 @@ export function createPluginRoutes(app: Express, pluginLoader: PluginLoader): vo
         return;
       }
 
-      plugin.enabled = !plugin.enabled;
+      // 切换启用状态
+      const newEnabled = !plugin.enabled;
+      plugin.enabled = newEnabled;
+
+      // 更新配置文件中的 disabledPlugins 列表
+      const config = getConfig();
+      const disabledPlugins = new Set(config.disabledPlugins || []);
+
+      if (newEnabled) {
+        disabledPlugins.delete(pluginName);
+      } else {
+        disabledPlugins.add(pluginName);
+      }
+
+      config.disabledPlugins = Array.from(disabledPlugins);
+      await saveConfig(config);
+
+      console.log(`[API] Plugin ${pluginName} ${newEnabled ? 'enabled' : 'disabled'}`);
+
+      // 刷新 skills prompt（启用/禁用插件后需要更新系统提示词)
+      refreshSkillsPrompt();
+
       res.json({
         name: pluginName,
         enabled: plugin.enabled,

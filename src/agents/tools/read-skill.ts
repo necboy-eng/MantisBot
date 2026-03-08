@@ -11,6 +11,10 @@ export function setSkillsLoader(loader: SkillsLoader): void {
   skillsLoaderInstance = loader;
 }
 
+export function getSkillsLoader(): SkillsLoader | null {
+  return skillsLoaderInstance;
+}
+
 /**
  * 广播 skill 使用事件到前端
  */

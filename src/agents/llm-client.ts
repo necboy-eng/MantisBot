@@ -5,6 +5,9 @@ import { PROVIDER_DEFAULTS } from '../config/schema.js';
 import type { ToolInfo } from '../types.js';
 import { ProfileLoader } from './profile-loader.js';
 import { workDirManager } from '../workdir/manager.js';
+import { getGlobalPluginLoader } from '../plugins/loader.js';
+import { getSkillsLoader } from './tools/read-skill.js';
+import { formatSkillsForPrompt } from '@mariozechner/pi-coding-agent';
 // import type { CircuitBreakerService } from '../reliability/circuit-breaker.js';
 // import type { RetryService } from '../reliability/retry-service.js';
 
@@ -31,10 +34,62 @@ export interface LLMResponse {
 
 // Skills 提示词（从 SkillsLoader 获取）
 let skillsPromptContent: string = '';
+let pluginSkillsPromptContent: string = '';  // 缓存 plugin skills prompt
 
 // 设置 skills 提示词
 export function setSkillsPrompt(prompt: string): void {
   skillsPromptContent = prompt;
+}
+
+/**
+ * 获取格式化后的 plugin skills prompt
+ * 用于 ClaudeAgentRunner 等需要单独获取的场景
+ */
+export function getPluginSkillsPrompt(): string {
+  return pluginSkillsPromptContent;
+}
+
+/**
+ * 刷新 skills 提示词（从 PluginLoader 和 SkillsLoader 重新获取）
+ * 在 toggle 插件后调用此函数
+ */
+export function refreshSkillsPrompt(): void {
+  const config = getConfig();
+  const enabledSkills = config.enabledSkills || [];
+
+  // 获取 standalone skill 对象（按 enabledSkills 过滤）
+  const skillsLoader = getSkillsLoader();
+  const standaloneSkillObjs = skillsLoader
+    ? skillsLoader.list().map(ls => ls.skill).filter(s => enabledSkills.includes(s.name))
+    : [];
+  console.log(`[LLMClient] Standalone skills: ${standaloneSkillObjs.map(s => s.name).join(', ') || '(none)'}`);
+
+  // 获取 plugin skills，转换为 pi-coding-agent 格式
+  const pluginLoader = getGlobalPluginLoader();
+  const pluginSkills = pluginLoader?.getSkills() || [];
+  console.log(`[LLMClient] Plugin skills count: ${pluginSkills.length}`);
+  if (pluginSkills.length > 0) {
+    console.log(`[LLMClient] Plugin skills: ${pluginSkills.map(s => s.name).join(', ')}`);
+  }
+
+  const formattedPluginSkills = pluginSkills.map(s => ({
+    name: s.name,
+    description: s.description,
+    filePath: s.filePath,
+    baseDir: '',
+    source: `plugin:${s.pluginName}`,
+    disableModelInvocation: false,
+  }));
+
+  // 合并后统一格式化为单个 <available_skills> 块，避免出现多个同名 XML 块
+  const allSkills = [...standaloneSkillObjs, ...formattedPluginSkills];
+  const combinedSkillsPrompt = formatSkillsForPrompt(allSkills);
+  console.log(`[LLMClient] Skills prompt refreshed: ${combinedSkillsPrompt.length} chars (${standaloneSkillObjs.length} standalone + ${formattedPluginSkills.length} plugin)`);
+
+  // 缓存 plugin-only 提示词供 ClaudeAgentRunner 使用（其系统提示词中单独追加）
+  pluginSkillsPromptContent = formatSkillsForPrompt(formattedPluginSkills);
+
+  setSkillsPrompt(combinedSkillsPrompt);
 }
 
 // 获取包含 skills 的系统提示词

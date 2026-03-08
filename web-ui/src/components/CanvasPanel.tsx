@@ -3,7 +3,8 @@ import { useTranslation } from 'react-i18next';
 import { FileItem, PreviewPane } from './PreviewPane';
 import { FileExplorer } from './FileExplorer';
 import { FileManager } from './FileManager';
-import { Monitor, Globe, FileText, HardDrive, Image, ExternalLink, Mail, List } from 'lucide-react';
+import { Monitor, Globe, FileText, HardDrive, Image, ExternalLink, Mail, List, Sun, Moon } from 'lucide-react';
+import { InfographicViewer } from './InfographicViewer';
 import { EmailPanel } from './EmailPanel';
 import type { EmailReference } from '../types/context-reference';
 
@@ -72,6 +73,8 @@ interface CanvasPanelProps {
   // 后端推送的新邮件摘要（轮询发现新邮件时传入）
   incomingEmails?: any[];
   onIncomingEmailsConsumed?: () => void;
+  // 信息图渲染
+  infographicSyntax?: string;
 }
 
 export function CanvasPanel({
@@ -100,6 +103,7 @@ export function CanvasPanel({
   onEmailTabOpen,
   incomingEmails,
   onIncomingEmailsConsumed,
+  infographicSyntax,
 }: CanvasPanelProps) {
   const { t } = useTranslation();
 
@@ -136,6 +140,42 @@ export function CanvasPanel({
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, []);
+  // 画布背景色：white（白色）或 dark（深色），独立于系统主题，从 localStorage 读取
+  const [canvasBg, setCanvasBg] = useState<'white' | 'dark'>(() => {
+    try {
+      const saved = localStorage.getItem('canvas-bg-mode');
+      if (saved === 'dark') return 'dark';
+    } catch {}
+    return 'white';
+  });
+
+  const toggleCanvasBg = () => {
+    setCanvasBg(prev => {
+      const next = prev === 'white' ? 'dark' : 'white';
+      try { localStorage.setItem('canvas-bg-mode', next); } catch {}
+      return next;
+    });
+  };
+
+  // preview 模式当前激活的 tab：'__infographic__' 或文件 path
+  const [activeTabId, setActiveTabId] = useState<string>('');
+
+  // 当新的信息图语法传入时，自动激活信息图 tab
+  const prevInfographicSyntaxRef = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (infographicSyntax && infographicSyntax !== prevInfographicSyntaxRef.current) {
+      setActiveTabId('__infographic__');
+    }
+    prevInfographicSyntaxRef.current = infographicSyntax;
+  }, [infographicSyntax]);
+
+  // 当 currentFile ���化时同步激活对应 tab（外部切换文件时）
+  useEffect(() => {
+    if (currentFile) {
+      setActiveTabId(currentFile.path);
+    }
+  }, [currentFile]);
+
   const [internalMode, setMode] = useState<CanvasMode>('files');
   // 保存文件管理器的当前路径（使用 homeDirectory 作为初始值）
   const [fileManagerPath, setFileManagerPath] = useState(homeDirectory);
@@ -384,32 +424,66 @@ export function CanvasPanel({
           </div>
         </div>
 
-        <button
-          onClick={onClose}
-          className="p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded"
-        >
-          <svg className="w-5 h-5 dark:text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-          </svg>
-        </button>
+        <div className="flex items-center gap-2">
+          {/* 画布背景色切换按钮 - preview 模式始终显示 */}
+          {mode === 'preview' && (
+            <button
+              onClick={toggleCanvasBg}
+              className="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-800 rounded transition-colors"
+              title={canvasBg === 'white' ? '切换为深色背景' : '切换为白色背景'}
+            >
+              {canvasBg === 'white'
+                ? <Moon className="w-4 h-4 text-gray-500 dark:text-gray-400" />
+                : <Sun className="w-4 h-4 text-gray-500 dark:text-gray-400" />
+              }
+            </button>
+          )}
+
+          <button
+            onClick={onClose}
+            className="p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded"
+          >
+            <svg className="w-5 h-5 dark:text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
       </div>
 
       {/* 内容区域 */}
       <div className="flex-1 overflow-hidden flex flex-col">
         {mode === 'preview' ? (
           <>
-            {/* 多标签栏 - 当有多个打开的文件时显示 */}
-            {openFiles.length > 1 && (
-              <div className="flex items-center gap-1 px-2 py-1 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 overflow-x-auto">
+            {/* tab 栏：信息图 tab + 文件 tabs，有任意内容时均显示 */}
+            {(infographicSyntax || openFiles.length >= 1) && (
+              <div className="flex items-center gap-1 px-2 py-1 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 overflow-x-auto flex-shrink-0">
+                {/* 信息图 tab */}
+                {infographicSyntax && (
+                  <div
+                    className={`group flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-md cursor-pointer transition-colors ${
+                      activeTabId === '__infographic__'
+                        ? 'bg-white dark:bg-gray-700 text-primary-600 dark:text-primary-400 shadow-sm'
+                        : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700'
+                    }`}
+                    onClick={() => setActiveTabId('__infographic__')}
+                  >
+                    <Image className="w-3.5 h-3.5 flex-shrink-0" />
+                    <span className="truncate max-w-[120px]">信息图</span>
+                  </div>
+                )}
+                {/* 文件 tabs */}
                 {openFiles.map((file) => (
                   <div
                     key={file.path}
                     className={`group flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-md cursor-pointer transition-colors ${
-                      currentFile?.path === file.path
+                      activeTabId === file.path
                         ? 'bg-white dark:bg-gray-700 text-primary-600 dark:text-primary-400 shadow-sm'
                         : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700'
                     }`}
-                    onClick={() => onCurrentFileChange?.(file)}
+                    onClick={() => {
+                      setActiveTabId(file.path);
+                      onCurrentFileChange?.(file);
+                    }}
                   >
                     <FileText className="w-3.5 h-3.5 flex-shrink-0" />
                     <span className="truncate max-w-[120px]">{file.name}</span>
@@ -419,11 +493,17 @@ export function CanvasPanel({
                         e.stopPropagation();
                         const newFiles = openFiles.filter(f => f.path !== file.path);
                         onOpenFilesChange?.(newFiles);
-                        // 如果关闭的是当前文件，切换到第一个文件
-                        if (currentFile?.path === file.path && newFiles.length > 0) {
-                          onCurrentFileChange?.(newFiles[0]);
-                        } else if (newFiles.length === 0) {
-                          onCurrentFileChange?.(null);
+                        if (activeTabId === file.path) {
+                          // 关闭当前激活的文件 tab：优先切换到信息图，否则切到剩余第一个文件
+                          if (infographicSyntax) {
+                            setActiveTabId('__infographic__');
+                          } else if (newFiles.length > 0) {
+                            setActiveTabId(newFiles[0].path);
+                            onCurrentFileChange?.(newFiles[0]);
+                          } else {
+                            setActiveTabId('');
+                            onCurrentFileChange?.(null);
+                          }
                         }
                       }}
                     >
@@ -436,13 +516,24 @@ export function CanvasPanel({
               </div>
             )}
 
-            {/* 文件预览区域 */}
-            <div className="flex-1 overflow-auto">
-              <PreviewPane file={currentFile} officePreviewServer={officePreviewServer} />
-            </div>
-
-            {/* 文件浏览器 */}
-            <FileExplorer onFileSelect={onFileSelect} />
+            {/* 内容：信息图 or 文件预览 */}
+            {activeTabId === '__infographic__' && infographicSyntax ? (
+              <div className="flex-1 overflow-hidden flex flex-col h-full">
+                <InfographicViewer
+                  infographicSyntax={infographicSyntax}
+                  width="100%"
+                  height="100%"
+                  canvasBg={canvasBg}
+                />
+              </div>
+            ) : (
+              <>
+                <div className="flex-1 overflow-auto h-full" style={canvasBg === 'dark' ? { backgroundColor: '#1f2937' } : { backgroundColor: '#ffffff' }}>
+                  <PreviewPane file={currentFile} officePreviewServer={officePreviewServer} canvasBg={canvasBg} />
+                </div>
+                <FileExplorer onFileSelect={onFileSelect} />
+              </>
+            )}
           </>
         ) : mode === 'files' ? (
           /* 文件管理器 */

@@ -4,12 +4,36 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import { Plugin, PluginManifest, Skill, Command, MCPConfig } from './types';
 
+// 全局 PluginLoader 实例引用，用于刷新 skills prompt
+let globalPluginLoader: PluginLoader | null = null;
+
+export function setGlobalPluginLoader(loader: PluginLoader): void {
+  globalPluginLoader = loader;
+}
+
+export function getGlobalPluginLoader(): PluginLoader | null {
+  return globalPluginLoader;
+}
+
 export class PluginLoader {
   private pluginsDir: string;
   private loadedPlugins: Map<string, Plugin> = new Map();
+  private disabledPlugins: Set<string> = new Set();
 
-  constructor(pluginsDir: string = './plugins') {
+  constructor(pluginsDir: string = './plugins', disabledPlugins: string[] = []) {
     this.pluginsDir = pluginsDir;
+    this.disabledPlugins = new Set(disabledPlugins);
+  }
+
+  /**
+   * 更新禁用插件列表
+   */
+  setDisabledPlugins(disabledPlugins: string[]): void {
+    this.disabledPlugins = new Set(disabledPlugins);
+    // 更新已加载插件的启用状态
+    for (const plugin of this.loadedPlugins.values()) {
+      plugin.enabled = !this.disabledPlugins.has(plugin.name);
+    }
   }
 
   async loadAll(): Promise<Plugin[]> {
@@ -71,7 +95,7 @@ export class PluginLoader {
       name: manifest.name,
       manifest,
       path: pluginPath,
-      enabled: true,
+      enabled: !this.disabledPlugins.has(manifest.name),
       skills,
       commands,
       mcpConfig,
@@ -162,11 +186,14 @@ export class PluginLoader {
         if (await this.exists(skillPath)) {
           const content = await fs.readFile(skillPath, 'utf-8');
           const { name, description } = this.parseSkillFrontmatter(content);
+          // 获取绝对路径
+          const absolutePath = path.resolve(skillPath);
           skills.push({
             name: name || entry.name,
             description,
             content,
             pluginName,
+            filePath: absolutePath,
           });
         }
       }

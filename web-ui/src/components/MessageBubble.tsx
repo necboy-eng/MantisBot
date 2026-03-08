@@ -66,6 +66,8 @@ interface MessageBubbleProps {
   getToolDisplayName: (toolName: string) => string;
   formatToolArgs: (toolName: string, args: Record<string, unknown> | undefined) => string;
   FileAttachmentCard: React.FC<{ attachment: FileAttachment; onOpenCanvas: () => void }>;
+  // 信息图检测回调
+  onInfographicDetected?: (syntax: string) => void;
 }
 
 // ─── 工具类型视觉映射 ──────────────────────────────────────────────────────────
@@ -166,6 +168,7 @@ export function MessageBubble({
   getToolDisplayName,
   formatToolArgs,
   FileAttachmentCard,
+  onInfographicDetected,
 }: MessageBubbleProps) {
   const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
@@ -504,7 +507,43 @@ export function MessageBubble({
               {/* 主内容 */}
               {msg.content.trim() || msg.thinking || (msg.toolStatus && msg.toolStatus.length > 0) ? (
                 <div className="prose prose-sm dark:prose-invert max-w-none break-words [&_pre]:bg-gray-900 [&_pre]:p-3 [&_pre]:rounded-xl [&_pre]:overflow-x-auto [&_code]:text-sm [&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1 [&_li]:my-0.5 [&_table]:block [&_table]:w-full [&_table]:overflow-x-auto [&_th]:whitespace-nowrap [&_td]:whitespace-nowrap">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
+                  <ReactMarkdown
+                    remarkPlugins={[remarkGfm]}
+                    components={{
+                      code({ className, children, ...props }) {
+                        const match = /language-(\w+)/.exec(className || '');
+                        const language = match ? match[1] : '';
+                        const codeContent = String(children).replace(/\n$/, '');
+                        const isInline = !className;
+
+                        // 检测 infographic 代码块
+                        if (language === 'infographic' && !isInline && onInfographicDetected) {
+                          // 对话框只显示简短提示，点击后打开画布
+                          return (
+                            <div
+                              className="my-3 p-4 bg-primary-50 dark:bg-primary-900/20 rounded-lg border border-primary-200 dark:border-primary-800 cursor-pointer hover:bg-primary-100 dark:hover:bg-primary-900/30 transition-colors"
+                              onClick={() => onInfographicDetected(codeContent)}
+                            >
+                              <div className="flex items-center gap-2 text-primary-600 dark:text-primary-400">
+                                <span className="text-lg">📊</span>
+                                <span className="font-medium">{t('infographic.viewInCanvas', '在画布中查看信息图')}</span>
+                              </div>
+                              <p className="text-xs text-primary-500 dark:text-primary-500 mt-1">
+                                {t('infographic.clickToView', '点击查看完整信息图')}
+                              </p>
+                            </div>
+                          );
+                        }
+
+                        // 其他代码块保持原样
+                        return (
+                          <code className={className} {...props}>
+                            {children}
+                          </code>
+                        );
+                      }
+                    }}
+                  >{msg.content}</ReactMarkdown>
                 </div>
               ) : (
                 /* 波形加载态 */

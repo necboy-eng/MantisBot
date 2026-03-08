@@ -39,6 +39,7 @@ export interface Skill {
   description: string;
   content: string;
   pluginName: string;
+  filePath: string;  // 用于 read_skill 工具定位文件
 }
 
 export interface Command {
