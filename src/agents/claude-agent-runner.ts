@@ -31,6 +31,21 @@ export interface ClaudeAgentRunnerOptions {
   claudeSessionId?: string;  // 用于 resume 的会话 ID
   /** 激活的 Agent 团队配置（仅 Claude SDK 支持） */
   activeTeam?: import('../config/schema.js').AgentTeam;
+  /**
+   * 覆盖 Anthropic API 的 base URL（优先级高于模型配置）
+   * 用于 OpenAI 兼容代理：将此设为本地代理地址，让 SDK 把请求发到代理
+   */
+  anthropicBaseUrl?: string;
+  /**
+   * 注入到每个 Anthropic API 请求的默认请求头
+   * 用于向代理传递上游配置（x-upstream-*）
+   */
+  defaultHeaders?: Record<string, string>;
+  /**
+   * 覆盖 ANTHROPIC_API_KEY（优先级高于模型配置的 apiKey）
+   * 用于 OpenAI 代理模式：传入编码了上游配置的代理 key
+   */
+  overrideApiKey?: string;
 }
 
 export interface StreamChunk {
@@ -275,6 +290,9 @@ export class ClaudeAgentRunner extends EventEmitter {
     maxIterations: number;
     approvalMode: ApprovalMode;
     activeTeam?: import('../config/schema.js').AgentTeam;
+    anthropicBaseUrl?: string;
+    defaultHeaders?: Record<string, string>;
+    overrideApiKey?: string;
   };
 
   // Agent SDK 会话 ID（用于 resume 继续会话）
@@ -333,6 +351,9 @@ export class ClaudeAgentRunner extends EventEmitter {
       maxIterations: options.maxIterations || 0,  // 0 = 无限制
       approvalMode,
       activeTeam: options.activeTeam,
+      anthropicBaseUrl: options.anthropicBaseUrl,
+      defaultHeaders: options.defaultHeaders,
+      overrideApiKey: options.overrideApiKey,
     };
     console.log('[ClaudeAgentRunner] Initialized with approvalMode:', approvalMode);
   }
@@ -584,10 +605,12 @@ export class ClaudeAgentRunner extends EventEmitter {
     const mc = _allModels.find((m: any) => m.name === this.options.model) as any;
     // 真实 API 模型 ID（如 "glm-5"），区别于显示名（如 "GLM-5-Aliyun"）
     const resolvedModelId = mc?.model || this.options.model;
+    // anthropicBaseUrl 优先：OpenAI 代理模式下指向本地代理，Anthropic 原生模式下为空
+    // overrideApiKey 优先：OpenAI 代理模式下使用编码了上游配置的代理 key
     applyIsolatedEnv({
       model: resolvedModelId,
-      apiKey: mc?.apiKey,
-      baseUrl: mc?.baseURL || mc?.baseUrl || mc?.endpoint,
+      apiKey: this.options.overrideApiKey || mc?.apiKey,
+      baseUrl: this.options.anthropicBaseUrl || mc?.baseURL || mc?.baseUrl || mc?.endpoint,
     });
 
     // 检查是否启用 Firecrawl（优先）还是 WebFetch
