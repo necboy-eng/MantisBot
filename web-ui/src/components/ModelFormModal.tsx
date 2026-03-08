@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { X, AlertCircle, CheckCircle, Loader2 } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { authFetch } from '../utils/auth';
 
 // 提供商配置：支持 OpenAI 和 Anthropic 两种协议的端点
@@ -157,6 +158,7 @@ interface ModelFormModalProps {
 }
 
 export function ModelFormModal({ isOpen, onClose, model, onSave }: ModelFormModalProps) {
+  const { t } = useTranslation();
   const [formData, setFormData] = useState<Model>({
     name: '',
     protocol: 'openai',
@@ -285,16 +287,15 @@ export function ModelFormModal({ isOpen, onClose, model, onSave }: ModelFormModa
 
   // 测试模型配置
   async function handleTest() {
-    // 基本验证
     if (!formData.model.trim()) {
-      setTestResult({ success: false, error: '请先填写模型 ID' });
+      setTestResult({ success: false, error: t('modelForm.testModelId') });
       return;
     }
     // 编辑模式下如果 API Key 是 ***，说明使用的是已保存的密钥
     // 新建模式下必须填写 API Key（除非是 Ollama）
     const isUsingSavedKey = isEditMode && formData.apiKey === '***';
     if (!formData.apiKey?.trim() && formData.provider !== 'ollama' && !isUsingSavedKey) {
-      setTestResult({ success: false, error: '请先填写 API 密钥' });
+      setTestResult({ success: false, error: t('modelForm.testApiKey') });
       return;
     }
 
@@ -320,7 +321,7 @@ export function ModelFormModal({ isOpen, onClose, model, onSave }: ModelFormModa
     } catch (err) {
       setTestResult({
         success: false,
-        error: err instanceof Error ? err.message : '测试失败',
+        error: err instanceof Error ? err.message : t('modelForm.saveFailed'),
       });
     } finally {
       setTesting(false);
@@ -333,25 +334,25 @@ export function ModelFormModal({ isOpen, onClose, model, onSave }: ModelFormModa
 
     // Validation
     if (!formData.name.trim()) {
-      setError('模型名称不能为空');
+      setError(t('modelForm.validationName'));
       return;
     }
     if (!formData.model.trim()) {
-      setError('模型 ID 不能为空');
+      setError(t('modelForm.validationModel'));
       return;
     }
     if (!formData.provider) {
-      setError('请选择提供商');
+      setError(t('modelForm.validationProvider'));
       return;
     }
     if (!formData.protocol) {
-      setError('请选择协议类型');
+      setError(t('modelForm.validationProtocol'));
       return;
     }
 
     // 自定义提供商必须填写端点
     if (formData.provider === 'custom' && !formData.baseUrl?.trim()) {
-      setError('自定义提供商必须填写 API 端点');
+      setError(t('modelForm.validationEndpoint'));
       return;
     }
 
@@ -375,7 +376,7 @@ export function ModelFormModal({ isOpen, onClose, model, onSave }: ModelFormModa
       await onSave(modelToSave);
     } catch (err) {
       console.error('Failed to save model:', err);
-      setError(err instanceof Error ? err.message : '保存失败');
+      setError(err instanceof Error ? err.message : t('modelForm.saveFailed'));
     } finally {
       setLoading(false);
     }
@@ -383,28 +384,17 @@ export function ModelFormModal({ isOpen, onClose, model, onSave }: ModelFormModa
 
   function getProviderHint(providerId: string | undefined): string {
     switch (providerId) {
-      case 'ollama':
-        return '本地模型通常不需要 API 密钥';
-      case 'anthropic':
-        return '需要 Anthropic API Key';
-      case 'openai':
-        return '需要 OpenAI API Key';
-      case 'deepseek':
-        return '需要 DeepSeek API Key';
-      case 'alibaba':
-        return '需要阿里云 DashScope API Key';
-      case 'moonshot':
-        return '需要 Moonshot API Key';
-      case 'zhipu':
-        return '需要智谱 API Key';
-      case 'minimax':
-        return '需要 MiniMax API Key';
-      case 'xai':
-        return '需要 xAI API Key';
-      case 'google':
-        return '需要 Google AI API Key';
-      default:
-        return '';
+      case 'ollama':    return t('modelForm.hintOllama');
+      case 'anthropic': return t('modelForm.hintAnthropic');
+      case 'openai':    return t('modelForm.hintOpenai');
+      case 'deepseek':  return t('modelForm.hintDeepseek');
+      case 'alibaba':   return t('modelForm.hintAlibaba');
+      case 'moonshot':  return t('modelForm.hintMoonshot');
+      case 'zhipu':     return t('modelForm.hintZhipu');
+      case 'minimax':   return t('modelForm.hintMinimax');
+      case 'xai':       return t('modelForm.hintXai');
+      case 'google':    return t('modelForm.hintGoogle');
+      default:          return '';
     }
   }
 
@@ -414,12 +404,12 @@ export function ModelFormModal({ isOpen, onClose, model, onSave }: ModelFormModa
     return [
       {
         value: 'openai',
-        label: 'OpenAI 兼容协议',
+        label: t('modelForm.protocolOpenai'),
         disabled: !provider || !provider.openai,
       },
       {
         value: 'anthropic',
-        label: 'Anthropic 协议',
+        label: t('modelForm.protocolAnthropic'),
         disabled: !provider || !provider.supportsAnthropic,
       },
     ];
@@ -433,7 +423,7 @@ export function ModelFormModal({ isOpen, onClose, model, onSave }: ModelFormModa
         {/* Header */}
         <div className="flex items-center justify-between p-6 border-b border-gray-200 dark:border-gray-700 sticky top-0 bg-white dark:bg-gray-900 z-10">
           <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
-            {isEditMode ? '编辑模型' : '添加模型'}
+            {isEditMode ? t('modelForm.editTitle') : t('modelForm.addTitle')}
           </h3>
           <button
             onClick={onClose}
@@ -448,14 +438,14 @@ export function ModelFormModal({ isOpen, onClose, model, onSave }: ModelFormModa
           {/* 推荐信息 */}
           <div className="p-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">
             <p className="text-sm text-blue-700 dark:text-blue-300">
-              <strong>推荐：</strong>使用 MiniMax Coding Plan，性价比高，适合编程任务。
+              <strong>{t('modelForm.recommendBanner')}</strong>
               <a
                 href="https://platform.minimaxi.com/subscribe/coding-plan"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="ml-1 text-blue-600 dark:text-blue-400 underline hover:text-blue-800 dark:hover:text-blue-200"
               >
-                立即注册 →
+                {t('modelForm.recommendLink')}
               </a>
             </p>
           </div>
@@ -484,7 +474,7 @@ export function ModelFormModal({ isOpen, onClose, model, onSave }: ModelFormModa
                 <p>{testResult.success ? testResult.message : testResult.error}</p>
                 {testResult.details && testResult.success && (
                   <p className="text-xs mt-1 opacity-75">
-                    模型: {testResult.details.model}
+                    {t('modelForm.testModelLabel', { model: testResult.details.model })}
                   </p>
                 )}
               </div>
@@ -494,27 +484,27 @@ export function ModelFormModal({ isOpen, onClose, model, onSave }: ModelFormModa
           {/* Model Name */}
           <div>
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-              模型名称 <span className="text-red-500">*</span>
+              {t('modelForm.fieldName')} <span className="text-red-500">*</span>
             </label>
             <input
               type="text"
               value={formData.name}
               onChange={(e) => handleChange('name', e.target.value)}
-              placeholder="例如: gpt-4, claude-3, deepseek-chat"
+              placeholder={t('modelForm.fieldNamePlaceholder')}
               disabled={isEditMode}
               className={`w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-primary-500 focus:border-transparent ${
                 isEditMode ? 'opacity-60 cursor-not-allowed' : ''
               }`}
             />
             <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-              {isEditMode ? '模型名称是主键，不可修改' : '用于识别模型的友好名称'}
+              {isEditMode ? t('modelForm.fieldNameHintEdit') : t('modelForm.fieldNameHintNew')}
             </p>
           </div>
 
           {/* Provider */}
           <div>
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-              模型提供商 <span className="text-red-500">*</span>
+              {t('modelForm.fieldProvider')} <span className="text-red-500">*</span>
             </label>
             <select
               value={formData.provider}
@@ -532,7 +522,7 @@ export function ModelFormModal({ isOpen, onClose, model, onSave }: ModelFormModa
           {/* Protocol */}
           <div>
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-              API 协议 <span className="text-red-500">*</span>
+              {t('modelForm.fieldProtocol')} <span className="text-red-500">*</span>
             </label>
             <select
               value={formData.protocol}
@@ -541,36 +531,36 @@ export function ModelFormModal({ isOpen, onClose, model, onSave }: ModelFormModa
             >
               {getAvailableProtocols().map(p => (
                 <option key={p.value} value={p.value} disabled={p.disabled}>
-                  {p.label} {p.disabled ? '(不支持)' : ''}
+                  {p.label} {p.disabled ? t('modelForm.protocolNotSupported') : ''}
                 </option>
               ))}
             </select>
             <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-              决定使用哪种 API 格式调用模型
+              {t('modelForm.fieldProtocolHint')}
             </p>
           </div>
 
           {/* Model ID */}
           <div>
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-              模型 ID <span className="text-red-500">*</span>
+              {t('modelForm.fieldModelId')} <span className="text-red-500">*</span>
             </label>
             <input
               type="text"
               value={formData.model}
               onChange={(e) => handleChange('model', e.target.value)}
-              placeholder="例如: gpt-4-turbo, claude-3-opus, deepseek-chat"
+              placeholder={t('modelForm.fieldModelIdPlaceholder')}
               className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-primary-500 focus:border-transparent"
             />
             <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-              模型的实际调用 ID
+              {t('modelForm.fieldModelIdHint')}
             </p>
           </div>
 
           {/* API Key */}
           <div>
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-              API 密钥
+              {t('modelForm.fieldApiKey')}
             </label>
             <input
               type="password"
@@ -587,7 +577,7 @@ export function ModelFormModal({ isOpen, onClose, model, onSave }: ModelFormModa
           {/* API Endpoint */}
           <div>
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-              API 端点
+              {t('modelForm.fieldEndpoint')}
             </label>
             <input
               type="text"
@@ -598,15 +588,15 @@ export function ModelFormModal({ isOpen, onClose, model, onSave }: ModelFormModa
             />
             <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
               {formData.provider === 'custom'
-                ? '自定义端点必须填写'
-                : '留空使用提供商默认端点，或自定义端点'}
+                ? t('modelForm.fieldEndpointHintCustom')
+                : t('modelForm.fieldEndpointHint')}
             </p>
           </div>
 
           {/* Model Capabilities */}
           <div>
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-              模型能力
+              {t('modelForm.fieldCapabilities')}
             </label>
             <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-3 space-y-2">
               <label className="flex items-start gap-3 cursor-pointer">
@@ -621,10 +611,10 @@ export function ModelFormModal({ isOpen, onClose, model, onSave }: ModelFormModa
                 />
                 <div>
                   <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                    视觉理解（图像识别）
+                    {t('modelForm.capabilityVision')}
                   </span>
                   <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-                    支持分析图片内容（如 GPT-4o、Claude 3、Gemini Pro Vision 等）
+                    {t('modelForm.capabilityVisionDesc')}
                   </p>
                 </div>
               </label>
@@ -645,7 +635,7 @@ export function ModelFormModal({ isOpen, onClose, model, onSave }: ModelFormModa
               ) : (
                 <CheckCircle className="w-4 h-4" />
               )}
-              {testing ? '测试中...' : '测试连接'}
+              {testing ? t('modelForm.btnTesting') : t('modelForm.btnTest')}
             </button>
 
             {/* Action Buttons */}
@@ -656,7 +646,7 @@ export function ModelFormModal({ isOpen, onClose, model, onSave }: ModelFormModa
                 disabled={loading}
                 className="px-4 py-2 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors disabled:opacity-50"
               >
-                取消
+                {t('modelForm.btnCancel')}
               </button>
               <button
                 type="submit"
@@ -666,7 +656,7 @@ export function ModelFormModal({ isOpen, onClose, model, onSave }: ModelFormModa
                 {loading && (
                   <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
                 )}
-                {loading ? '保存中...' : '保存'}
+                {loading ? t('modelForm.btnSaving') : t('modelForm.btnSave')}
               </button>
             </div>
           </div>
