@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import archiver from 'archiver';
+import multer from 'multer';
 import { workDirManager } from '../../workdir/manager.js';
 import { getStorageManager, hasStorageManager } from '../../storage/manager.js';
 import { StorageError } from '../../storage/storage.interface.js';
@@ -626,6 +627,91 @@ router.post('/api/explore/upload', async (req, res) => {
       return res.status(error.code === 'NOT_FOUND' ? 404 : 500).json({
         error: error.message
       });
+    }
+    res.status(500).json({ error: 'Failed to upload file' });
+  }
+});
+
+// 文件 multipart 上传（支持进度追踪）
+const upload = multer({ storage: multer.memoryStorage() });
+
+router.post('/api/explore/upload-multipart', upload.single('file'), async (req, res) => {
+  const targetDir = req.body?.path as string;
+  const file = req.file;
+  const baseDir = workDirManager.getCurrentWorkDir();
+
+  if (!targetDir || !file) {
+    return res.status(400).json({ error: 'path and file are required' });
+  }
+
+  if (!isPathSafe(baseDir, targetDir)) {
+    return res.status(403).json({ error: 'Path traversal detected' });
+  }
+
+  const sensitiveError = checkSensitivePathAccess(targetDir, baseDir);
+  if (sensitiveError) {
+    return res.status(403).json({ error: sensitiveError });
+  }
+
+  // multer 默认以 latin1 读取 Content-Disposition 中的文件名，
+  // 而浏览器发送的实际是 UTF-8 编码——需重新解码还原中文等字符
+  const filename = Buffer.from(file.originalname, 'latin1').toString('utf8');
+
+  try {
+    if (shouldUseStorageManager()) {
+      const storageManager = getStorageManager();
+      const storage = storageManager.getCurrentStorage();
+
+      const relativePath = path.isAbsolute(targetDir)
+        ? path.relative(baseDir, targetDir)
+        : targetDir;
+
+      const dirExists = await storage.exists(relativePath);
+      if (!dirExists) {
+        return res.status(404).json({ error: 'Directory not found' });
+      }
+
+      const dirStats = await storage.getStats(relativePath);
+      if (!dirStats.isDirectory) {
+        return res.status(400).json({ error: 'Target path is not a directory' });
+      }
+
+      const filePath = path.join(relativePath, filename).replace(/\\/g, '/');
+      await storage.writeFile(filePath, file.buffer);
+
+      return res.status(201).json({
+        success: true,
+        path: path.join(baseDir, filePath),
+        name: filename,
+        size: file.size
+      });
+    }
+
+    // 回退到本地文件系统
+    const fullPath = resolveUserPath(baseDir, targetDir);
+
+    if (!fs.existsSync(fullPath)) {
+      return res.status(404).json({ error: 'Directory not found' });
+    }
+
+    const stats = fs.statSync(fullPath);
+    if (!stats.isDirectory()) {
+      return res.status(400).json({ error: 'Target path is not a directory' });
+    }
+
+    const filePath = path.join(fullPath, filename);
+    fs.writeFileSync(filePath, file.buffer);
+
+    res.status(201).json({
+      success: true,
+      path: filePath,
+      name: filename,
+      size: file.size
+    });
+  } catch (error) {
+    console.error('Explore multipart upload error:', error);
+    if (error instanceof StorageError) {
+      return res.status(error.code === 'NOT_FOUND' ? 404 : 500).json({ error: error.message });
     }
     res.status(500).json({ error: 'Failed to upload file' });
   }

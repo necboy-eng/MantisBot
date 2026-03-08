@@ -58,19 +58,23 @@ export class StorageManager {
     }
 
     // 设置默认存储
+    // 'local' 或空值表示使用硬编码的本地文件系统，不自动连接任何 provider
     const defaultId = this.config.default;
-    if (defaultId && this.storages.has(defaultId)) {
+    if (!defaultId || defaultId === 'local') {
+      console.log('[StorageManager] Default is local filesystem, skipping auto-connect');
+      return;
+    }
+    if (this.storages.has(defaultId)) {
       try {
         await this.switchTo(defaultId);
         console.log(`[StorageManager] Default storage set to: ${defaultId}`);
       } catch (error) {
         console.error(`[StorageManager] Failed to connect to default storage '${defaultId}':`, error);
-        // 尝试连接到第一个可用的存储
-        await this.connectToFirstAvailable();
+        // 连接失败时保持未连接状态（不 fallback 到其他 provider）
+        console.warn('[StorageManager] Falling back to local filesystem');
       }
     } else {
-      console.warn(`[StorageManager] Default storage '${defaultId}' not found, using first available`);
-      await this.connectToFirstAvailable();
+      console.warn(`[StorageManager] Default storage '${defaultId}' not found, using local filesystem`);
     }
   }
 

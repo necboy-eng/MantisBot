@@ -77,6 +77,15 @@ router.get('/api/storage/current', (req, res) => {
 
     try {
       const current = storageManager.getCurrentStorage();
+      // local 类型存储统一用 __local__ 标识，让前端正确高亮本地文件系统条目
+      if (current.type === 'local') {
+        return res.json({
+          id: '__local__',
+          name: 'Local Filesystem',
+          type: 'local',
+          connected: true
+        });
+      }
       const workDir = workDirManager.getCurrentWorkDir();
       // 如果是 NAS 且工作目录不是用户主目录，则工作目录就是挂载路径
       const mountPath = current.type === 'nas' && workDir !== os.homedir() ? workDir : undefined;
@@ -151,6 +160,16 @@ router.post('/api/storage/switch', async (req, res) => {
     await storageManager.switchTo(providerId);
 
     const providerConfig = storage.config;
+
+    // local 类型直接返回，无需挂载处理
+    if (providerConfig.type === 'local') {
+      return res.json({
+        success: true,
+        currentProvider: '__local__',
+        connected: true
+      });
+    }
+
     let localMountActive = false;
     let localMountPath: string | undefined;
     let autoMounted = false;

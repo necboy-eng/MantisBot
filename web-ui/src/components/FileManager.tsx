@@ -1,11 +1,20 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { FileItem } from './PreviewPane';
 import { StorageSelector } from './StorageSelector';
-import { authFetch, appendTokenToUrl } from '../utils/auth';
+import { authFetch, appendTokenToUrl, getAuthToken } from '../utils/auth';
 
 type ViewMode = 'icons' | 'list' | 'columns';
 type SortField = 'name' | 'size' | 'modified';
 type SortDirection = 'asc' | 'desc';
+type UploadTaskStatus = 'pending' | 'uploading' | 'done' | 'error';
+
+interface UploadTask {
+  id: string;
+  fileName: string;
+  progress: number;
+  status: UploadTaskStatus;
+  error?: string;
+}
 
 interface FileManagerProps {
   onFileSelect: (file: FileItem) => void;
@@ -102,7 +111,7 @@ export function FileManager({
   const [columns, setColumns] = useState<string[]>(['/']);
   const [history, setHistory] = useState<string[]>(['/']);
   const [historyIndex, setHistoryIndex] = useState(0);
-  const [uploading, setUploading] = useState(false);
+  const [uploadTasks, setUploadTasks] = useState<UploadTask[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const [showStorageSelector, setShowStorageSelector] = useState(false);
   const [sortField, setSortField] = useState<SortField>('name');
@@ -304,45 +313,92 @@ export function FileManager({
     setSelectedItem(item);
   };
 
-  // 上传文件
+  // 单文件 multipart 上传（带进度）
+  const uploadSingleFile = (file: File, taskId: string, path: string): Promise<void> => {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('path', path);
+
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) {
+          const percent = Math.round((e.loaded / e.total) * 100);
+          setUploadTasks(prev =>
+            prev.map(t => t.id === taskId ? { ...t, progress: percent } : t)
+          );
+        }
+      };
+
+      xhr.onload = () => {
+        if (xhr.status === 201) {
+          setUploadTasks(prev =>
+            prev.map(t => t.id === taskId ? { ...t, status: 'done', progress: 100 } : t)
+          );
+          resolve();
+        } else {
+          let errMsg = '上传失败';
+          try { errMsg = JSON.parse(xhr.responseText).error || errMsg; } catch { /* ignore */ }
+          setUploadTasks(prev =>
+            prev.map(t => t.id === taskId ? { ...t, status: 'error', error: errMsg } : t)
+          );
+          reject(new Error(errMsg));
+        }
+      };
+
+      xhr.onerror = () => {
+        const errMsg = '网络错误';
+        setUploadTasks(prev =>
+          prev.map(t => t.id === taskId ? { ...t, status: 'error', error: errMsg } : t)
+        );
+        reject(new Error(errMsg));
+      };
+
+      xhr.open('POST', '/api/explore/upload-multipart');
+      const token = getAuthToken();
+      if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+      xhr.send(formData);
+    });
+  };
+
+  // 批量上传（并发 3）
   const uploadFiles = async (files: FileList) => {
-    setUploading(true);
-    try {
-      for (const file of Array.from(files)) {
-        const reader = new FileReader();
-        await new Promise<void>((resolve, reject) => {
-          reader.onload = async () => {
-            try {
-              const base64 = (reader.result as string).split(',')[1];
-              const res = await authFetch('/api/explore/upload', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  path: currentPath,
-                  filename: file.name,
-                  content: base64
-                })
-              });
-              if (!res.ok) {
-                throw new Error(`Upload failed: ${file.name}`);
-              }
-              resolve();
-            } catch (err) {
-              reject(err);
-            }
-          };
-          reader.onerror = () => reject(reader.error);
-          reader.readAsDataURL(file);
-        });
+    const fileArray = Array.from(files);
+    const uploadPath = currentPath;
+    const tasks: UploadTask[] = fileArray.map((f, i) => ({
+      id: `${f.name}-${Date.now()}-${i}`,
+      fileName: f.name,
+      progress: 0,
+      status: 'pending' as UploadTaskStatus,
+    }));
+    setUploadTasks(tasks);
+
+    const CONCURRENCY = 3;
+    let index = 0;
+
+    const runNext = async (): Promise<void> => {
+      if (index >= fileArray.length) return;
+      const i = index++;
+      const task = tasks[i];
+      setUploadTasks(prev =>
+        prev.map(t => t.id === task.id ? { ...t, status: 'uploading' } : t)
+      );
+      try {
+        await uploadSingleFile(fileArray[i], task.id, uploadPath);
+      } catch (_) {
+        // 错误已在 uploadSingleFile 中记录到 task state
       }
-      // 刷新目录
-      loadDirectory(currentPath);
-    } catch (error) {
-      console.error('Upload error:', error);
-      alert('上传失败: ' + (error instanceof Error ? error.message : '未知错误'));
-    } finally {
-      setUploading(false);
-    }
+      await runNext();
+    };
+
+    await Promise.all(
+      Array.from({ length: Math.min(CONCURRENCY, fileArray.length) }, runNext)
+    );
+
+    // 刷新目录
+    loadDirectory(uploadPath);
+    // 3 秒后自动清空进度面板
+    setTimeout(() => setUploadTasks([]), 3000);
   };
 
   // 处理文件选择
@@ -1076,14 +1132,14 @@ export function FileManager({
         {/* 上传按钮 */}
         <button
           onClick={() => fileInputRef.current?.click()}
-          disabled={uploading}
+          disabled={uploadTasks.some(t => t.status === 'uploading')}
           className="flex items-center gap-1 px-3 py-1.5 text-sm bg-primary-500 text-white rounded hover:bg-primary-600 disabled:opacity-50 disabled:cursor-not-allowed"
           title="上传文件"
         >
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
           </svg>
-          {uploading ? '上传中...' : '上传'}
+          上传
         </button>
 
         {/* 新建文件夹 */}
@@ -1201,7 +1257,6 @@ export function FileManager({
           </div>
         )}
         {selectedItem && selectedItems.size === 0 && <span>已选择: {selectedItem.name}</span>}
-        {uploading && <span className="text-primary-500">正在上传...</span>}
       </div>
 
       {/* 右键菜单 */}
@@ -1467,6 +1522,57 @@ export function FileManager({
                 {Math.round((downloadProgress / downloadTotal) * 100)}%
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* 上传进度浮动面板 */}
+      {uploadTasks.length > 0 && (
+        <div className="fixed bottom-4 right-4 z-50 w-72 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-xl overflow-hidden">
+          <div className="flex items-center justify-between px-3 py-2 bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-700">
+            <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+              上传进度 ({uploadTasks.filter(t => t.status === 'done').length}/{uploadTasks.length})
+            </span>
+            <button
+              onClick={() => setUploadTasks([])}
+              className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
+              title="关闭"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+          <div className="max-h-60 overflow-y-auto divide-y divide-gray-100 dark:divide-gray-700">
+            {uploadTasks.map(task => (
+              <div key={task.id} className="px-3 py-2">
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-xs text-gray-600 dark:text-gray-400 truncate max-w-[180px]" title={task.fileName}>
+                    {task.fileName}
+                  </span>
+                  <span className="text-xs ml-1 flex-shrink-0">
+                    {task.status === 'done' && <span className="text-green-500">✓</span>}
+                    {task.status === 'error' && <span className="text-red-500" title={task.error}>✗</span>}
+                    {(task.status === 'uploading' || task.status === 'pending') && (
+                      <span className="text-gray-500">{task.progress}%</span>
+                    )}
+                  </span>
+                </div>
+                <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-1.5 overflow-hidden">
+                  <div
+                    className={`h-full rounded-full transition-all duration-200 ${
+                      task.status === 'done' ? 'bg-green-500' :
+                      task.status === 'error' ? 'bg-red-500' :
+                      'bg-primary-500'
+                    }`}
+                    style={{ width: `${task.progress}%` }}
+                  />
+                </div>
+                {task.status === 'error' && task.error && (
+                  <p className="text-xs text-red-500 mt-0.5 truncate">{task.error}</p>
+                )}
+              </div>
+            ))}
           </div>
         </div>
       )}
