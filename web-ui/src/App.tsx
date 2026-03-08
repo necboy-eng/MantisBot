@@ -1251,7 +1251,8 @@ function App() {
         setApprovalMode('dangerous');
       }
       // 切换会话时，同步模型选择器为该会话实际使用的模型
-      if (data.model) {
+      // 需验证模型名是否有效（旧会话可能存了 'default' 等无效值）
+      if (data.model && config?.models?.some((m: any) => m.name === data.model)) {
         setSelectedModel(data.model);
       }
     } catch (e) {
