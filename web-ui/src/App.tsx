@@ -376,6 +376,18 @@ function App() {
 
   // 首次启动模型配置提示状态
   const [modelConfigPromptOpen, setModelConfigPromptOpen] = useState(false);
+  const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
+  const modelDropdownRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!modelDropdownOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (!modelDropdownRef.current?.contains(e.target as Node)) {
+        setModelDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [modelDropdownOpen]);
 
   // 鉴权状态：authChecked=true 表示已完成检查（无论是否登录）
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -2387,15 +2399,69 @@ function App() {
               </svg>
             </button>
             {config?.models && config.models.length >= 1 && (
-              <select
-                value={selectedModel}
-                onChange={e => setSelectedModel(e.target.value)}
-                className="px-2 py-1.5 md:px-3 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-sm max-w-[120px] md:max-w-none"
+              <div
+                ref={modelDropdownRef}
+                className="relative"
               >
-                {config.models.filter(m => m.enabled !== false).map(m => (
-                  <option key={m.name} value={m.name}>{m.name}</option>
-                ))}
-              </select>
+                {/* 触发按钮 */}
+                <button
+                  onClick={() => setModelDropdownOpen(v => !v)}
+                  className="flex items-center gap-1.5 px-2 py-1.5 md:px-3 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-sm max-w-[140px] md:max-w-[200px] hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+                >
+                  <span className="truncate flex-1 text-left">
+                    {selectedModel}
+                  </span>
+                  {/* 当前模型的协议 badge */}
+                  {(() => {
+                    const cur = config.models.find(m => m.name === selectedModel);
+                    const proto = cur?.protocol;
+                    if (!proto) return null;
+                    const isAnthropic = proto === 'anthropic';
+                    return (
+                      <span className={`flex-shrink-0 text-[9px] font-mono font-semibold px-1 py-0.5 rounded border leading-none ${
+                        isAnthropic
+                          ? 'bg-orange-50 dark:bg-orange-900/30 text-orange-600 dark:text-orange-400 border-orange-200 dark:border-orange-700'
+                          : 'bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 border-blue-200 dark:border-blue-700'
+                      }`}>
+                        {isAnthropic ? 'ANT' : 'OAI'}
+                      </span>
+                    );
+                  })()}
+                  <svg className={`w-3.5 h-3.5 flex-shrink-0 text-gray-400 transition-transform ${modelDropdownOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                  </svg>
+                </button>
+
+                {/* 下拉列表 */}
+                {modelDropdownOpen && (
+                  <div className="absolute top-full left-0 mt-1 min-w-full w-max max-w-[260px] bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg z-50 py-1 overflow-hidden">
+                    {config.models.filter(m => m.enabled !== false).map(m => {
+                      const isAnthropic = m.protocol === 'anthropic';
+                      const isSelected = m.name === selectedModel;
+                      return (
+                        <button
+                          key={m.name}
+                          onClick={() => { setSelectedModel(m.name); setModelDropdownOpen(false); }}
+                          className={`w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors ${
+                            isSelected ? 'bg-primary-50 dark:bg-primary-900/20 text-primary-700 dark:text-primary-300' : 'text-gray-700 dark:text-gray-300'
+                          }`}
+                        >
+                          <span className="flex-1 truncate">{m.name}</span>
+                          {m.protocol && (
+                            <span className={`flex-shrink-0 text-[9px] font-mono font-semibold px-1 py-0.5 rounded border leading-none ${
+                              isAnthropic
+                                ? 'bg-orange-50 dark:bg-orange-900/30 text-orange-600 dark:text-orange-400 border-orange-200 dark:border-orange-700'
+                                : 'bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 border-blue-200 dark:border-blue-700'
+                            }`}>
+                              {isAnthropic ? 'ANT' : 'OAI'}
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
             )}
             {/* Language Switcher */}
             <LanguageSwitcher />

@@ -40,9 +40,13 @@ import { fileURLToPath } from 'node:url';
 import { installLogInterceptor } from './utils/log-interceptor.js';
 import { getHooksLoader } from './hooks/loader.js';
 import { registerSelfImprovingHooks, ensureLearningsDir } from './hooks/self-improving.js';
+import { startProxy, stopProxy } from './agents/openai-proxy.js';
 
 export async function main(): Promise<void> {
   console.log('[MantisBot] Starting...');
+
+  // 启动 OpenAI 兼容代理（用于将 Claude SDK 请求转发到 OpenAI 兼容后端）
+  await startProxy();
 
   // Load config
   loadConfig();
@@ -319,6 +323,7 @@ export async function main(): Promise<void> {
       await tunnelManager.stopAll();
     }
     await stopChannels();
+    await stopProxy();
     // Clean up error handling components (if needed)
     if (globalErrorHandler) {
       // globalErrorHandler.destroy(); // Not implemented yet
@@ -334,6 +339,7 @@ export async function main(): Promise<void> {
       await tunnelManager.stopAll();
     }
     await stopChannels();
+    await stopProxy();
     // Clean up error handling components (if needed)
     if (globalErrorHandler) {
       // globalErrorHandler.destroy(); // Not implemented yet

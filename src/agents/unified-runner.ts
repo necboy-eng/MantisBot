@@ -1,13 +1,15 @@
 // src/agents/unified-runner.ts
 // 统一的 Agent Runner 入口
-// 根据模型类型自动选择 ClaudeAgentRunner 或 OpenAICompatRunner
+// 所有模型统一使用 ClaudeAgentRunner（Claude Agent SDK）
+// OpenAI 协议模型通过本地代理自动转换协议
 
 import { EventEmitter } from 'events';
 import { ToolRegistry } from './tools/registry.js';
 import { getConfig } from '../config/loader.js';
 import { ClaudeAgentRunner } from './claude-agent-runner.js';
-import { OpenAICompatRunner } from './openai-compat-runner.js';
-import type { LLMMessage, FileAttachment } from '../types.js';
+import type { ClaudeAgentRunnerOptions } from './claude-agent-runner.js';
+import { getProxyBaseURL, encodeUpstreamConfig } from './openai-proxy.js';
+import type { LLMMessage } from '../types.js';
 import {
   type StreamChunk,
   type AgentResult,
@@ -16,19 +18,14 @@ import {
 } from './types.js';
 
 /**
- * 判断模型是否使用 Claude Agent SDK
- *
- * 判断逻辑（按优先级）：
- * 1. protocol === 'anthropic' → 使用 Claude Agent SDK
- * 2. provider === 'anthropic' → 使用 Claude Agent SDK
- * 3. 其他情况 → 使用 OpenAI 兼容模式
+ * 判断模型是否使用 Anthropic 原生协议（直连，不需要代理）
  */
-function isClaudeModel(modelName: string): boolean {
+function isAnthropicNative(modelName: string): boolean {
   const config = getConfig();
   const modelConfig = config.models.find((m: { name: string }) => m.name === modelName);
 
   if (!modelConfig) {
-    console.warn(`[UnifiedRunner] Model not found in config: ${modelName}, defaulting to OpenAI compatible`);
+    console.warn(`[UnifiedRunner] Model not found in config: ${modelName}, defaulting to OpenAI proxy`);
     return false;
   }
 
@@ -36,30 +33,29 @@ function isClaudeModel(modelName: string): boolean {
 
   // 1. 优先检查 protocol 字段
   if (mc.protocol === 'anthropic') {
-    console.log(`[UnifiedRunner] Model: ${modelName}, protocol: ${mc.protocol}, useClaudeSdk: true`);
+    console.log(`[UnifiedRunner] Model: ${modelName}, protocol: anthropic → direct`);
     return true;
   }
 
   // 2. 检查 provider 字段
   if (mc.provider === 'anthropic') {
-    console.log(`[UnifiedRunner] Model: ${modelName}, provider: ${mc.provider}, useClaudeSdk: true`);
+    console.log(`[UnifiedRunner] Model: ${modelName}, provider: anthropic → direct`);
     return true;
   }
 
-  console.log(`[UnifiedRunner] Model: ${modelName}, provider: ${mc.provider || 'none'}, useClaudeSdk: false`);
+  console.log(`[UnifiedRunner] Model: ${modelName}, protocol: openai → proxy`);
   return false;
 }
 
 /**
  * 统一的 Agent Runner
- * 根据模型类型自动选择底层实现
+ * 所有模型都使用 ClaudeAgentRunner（Claude Agent SDK）
+ * - Anthropic 原生模型：直连，配置来自 env-isolation
+ * - OpenAI 兼容模型：通过本地代理，上游配置编码在 API key 中
  */
 export class UnifiedAgentRunner extends EventEmitter implements IAgentRunner {
-  private runner: IAgentRunner;
+  private claudeRunner: ClaudeAgentRunner;
   private options: AgentRunnerOptions;
-  private toolRegistry: ToolRegistry;
-  private openaiRunner: OpenAICompatRunner | null = null; // 保存引用以便调用 abort
-  private claudeRunner: ClaudeAgentRunner | null = null; // 保存引用以便调用 abort
   private abortController: AbortController | null = null;
 
   constructor(
@@ -67,7 +63,6 @@ export class UnifiedAgentRunner extends EventEmitter implements IAgentRunner {
     options: AgentRunnerOptions = {}
   ) {
     super();
-    this.toolRegistry = toolRegistry;
     this.options = options;
 
     // 确定默认模型
@@ -76,28 +71,46 @@ export class UnifiedAgentRunner extends EventEmitter implements IAgentRunner {
       options.model = config.models[0]?.name;
     }
 
-    // 根据模型类型选择实现
-    if (options.model && isClaudeModel(options.model)) {
-      console.log(`[UnifiedRunner] Using ClaudeAgentRunner for model: ${options.model}`);
-      this.claudeRunner = new ClaudeAgentRunner(toolRegistry, {
-        ...options,
-      });
-      this.runner = this.claudeRunner;
+    let claudeOptions: ClaudeAgentRunnerOptions = { ...options };
 
-      // 转发 Claude Agent Runner 的事件
-      this.claudeRunner.on('permissionRequest', (request: any) => {
-        this.emit('permissionRequest', request);
-      });
+    if (options.model && !isAnthropicNative(options.model)) {
+      // OpenAI 兼容模型：通过本地代理
+      const proxyBaseURL = getProxyBaseURL();
+      if (!proxyBaseURL) {
+        console.error('[UnifiedRunner] OpenAI proxy is not running! Call startProxy() before creating runners.');
+      } else {
+        // 获取上游模型配置
+        const config = getConfig();
+        const mc = config.models.find((m: any) => m.name === options.model) as any;
+        const upstreamModel = mc?.model || options.model!;
+        const upstreamApiKey = mc?.apiKey || '';
+        const upstreamBaseUrl = mc?.baseURL || mc?.baseUrl || mc?.endpoint || '';
+
+        // 编码上游配置到 API key 中
+        const encodedKey = encodeUpstreamConfig({
+          baseUrl: upstreamBaseUrl,
+          apiKey: upstreamApiKey,
+          model: upstreamModel,
+        });
+
+        console.log(`[UnifiedRunner] OpenAI proxy mode: ${options.model} → ${proxyBaseURL} (upstream: ${upstreamBaseUrl})`);
+
+        claudeOptions = {
+          ...options,
+          anthropicBaseUrl: proxyBaseURL,
+          overrideApiKey: encodedKey,
+        };
+      }
     } else {
-      console.log(`[UnifiedRunner] Using OpenAICompatRunner for model: ${options.model}`);
-      this.openaiRunner = new OpenAICompatRunner(toolRegistry, options);
-      this.runner = this.openaiRunner;
-
-      // 转发 OpenAI Runner 的权限请求事件
-      this.openaiRunner.on('permissionRequest', (request: any) => {
-        this.emit('permissionRequest', request);
-      });
+      console.log(`[UnifiedRunner] Anthropic native mode: ${options.model}`);
     }
+
+    this.claudeRunner = new ClaudeAgentRunner(toolRegistry, claudeOptions);
+
+    // 转发事件
+    this.claudeRunner.on('permissionRequest', (request: any) => {
+      this.emit('permissionRequest', request);
+    });
   }
 
   /** 当前 Runner 使用的模型名称 */
@@ -110,28 +123,18 @@ export class UnifiedAgentRunner extends EventEmitter implements IAgentRunner {
    */
   abort(): void {
     console.log('[UnifiedRunner] Abort requested');
-    if (this.openaiRunner) {
-      this.openaiRunner.abort();
-    }
-    if (this.claudeRunner) {
-      this.claudeRunner.abort();
-    }
+    this.claudeRunner.abort();
     if (this.abortController) {
       this.abortController.abort();
     }
   }
 
   /**
-   * 动态设置激活的 Agent 团队（仅 ClaudeAgentRunner 支持）
-   * 由 MessageDispatcher 在每次消息分发时调用
+   * 动态设置激活的 Agent 团队
    */
   setActiveTeam(team: import('../config/schema.js').AgentTeam | null): void {
-    if (this.claudeRunner) {
-      (this.claudeRunner as any).options.activeTeam = team ?? undefined;
-      console.log(`[UnifiedRunner] Active team set to: ${team?.name ?? 'none'}`);
-    } else {
-      console.log('[UnifiedRunner] setActiveTeam ignored: not using ClaudeAgentRunner');
-    }
+    (this.claudeRunner as any).options.activeTeam = team ?? undefined;
+    console.log(`[UnifiedRunner] Active team set to: ${team?.name ?? 'none'}`);
   }
 
   /**
@@ -142,14 +145,13 @@ export class UnifiedAgentRunner extends EventEmitter implements IAgentRunner {
     conversationHistory: LLMMessage[] = [],
     abortSignal?: AbortSignal
   ): AsyncGenerator<StreamChunk> {
-    // 创建内部 AbortController，支持 abort() 方法
     this.abortController = abortSignal ? null : new AbortController();
     const signal = abortSignal || this.abortController?.signal;
 
     if (signal) {
-      yield* this.runner.streamRun(userMessage, conversationHistory, signal);
+      yield* this.claudeRunner.streamRun(userMessage, conversationHistory, signal);
     } else {
-      yield* this.runner.streamRun(userMessage, conversationHistory);
+      yield* this.claudeRunner.streamRun(userMessage, conversationHistory);
     }
   }
 
@@ -161,14 +163,9 @@ export class UnifiedAgentRunner extends EventEmitter implements IAgentRunner {
     conversationHistory: LLMMessage[] = [],
     abortSignal?: AbortSignal
   ): Promise<AgentResult> {
-    // 创建内部 AbortController，支持 abort() 方法
     this.abortController = abortSignal ? null : new AbortController();
-    const signal = abortSignal || this.abortController?.signal;
 
-    if (signal) {
-      return this.runner.run(userMessage, conversationHistory, signal);
-    }
-    return this.runner.run(userMessage, conversationHistory);
+    return this.claudeRunner.run(userMessage, conversationHistory);
   }
 
   /**
@@ -180,33 +177,25 @@ export class UnifiedAgentRunner extends EventEmitter implements IAgentRunner {
     updatedInput?: Record<string, unknown>,
     denyMessage?: string
   ): Promise<void> {
-    if (this.runner.respondToPermission) {
-      return this.runner.respondToPermission(requestId, approved, updatedInput, denyMessage);
+    if (this.claudeRunner.respondToPermission) {
+      return this.claudeRunner.respondToPermission(requestId, approved, updatedInput, denyMessage);
     }
-    console.warn('[UnifiedRunner] respondToPermission not supported by underlying runner');
+    console.warn('[UnifiedRunner] respondToPermission not supported');
   }
 
   /**
    * 获取会话 ID
    */
   getSessionId(): string | null {
-    // ClaudeAgentRunner 使用 getClaudeSessionId()
-    if (this.claudeRunner && this.claudeRunner.getClaudeSessionId) {
-      return this.claudeRunner.getClaudeSessionId();
-    }
-    // 兼容其他 runner 的 getSessionId()
-    if (this.runner.getSessionId) {
-      return this.runner.getSessionId();
-    }
-    return null;
+    return this.claudeRunner.getClaudeSessionId?.() ?? null;
   }
 
   /**
    * 清理资源
    */
   dispose(): void {
-    if (this.runner.dispose) {
-      this.runner.dispose();
+    if (this.claudeRunner.dispose) {
+      this.claudeRunner.dispose();
     }
   }
 
@@ -214,10 +203,9 @@ export class UnifiedAgentRunner extends EventEmitter implements IAgentRunner {
    * 简单对话（不带工具）
    */
   async simpleChat(message: string): Promise<string> {
-    if ('simpleChat' in this.runner && typeof (this.runner as any).simpleChat === 'function') {
-      return (this.runner as any).simpleChat(message);
+    if ('simpleChat' in this.claudeRunner && typeof (this.claudeRunner as any).simpleChat === 'function') {
+      return (this.claudeRunner as any).simpleChat(message);
     }
-    // 降级：使用 run 方法
     const result = await this.run(message, []);
     return result.response;
   }
