@@ -52,6 +52,10 @@ export interface Message {
   toolStatus?: ToolStatus[];
   skillChain?: SkillCall[];
   agentInvocations?: AgentInvocationStatus[];
+  usage?: {
+    inputTokens: number;
+    outputTokens: number;
+  };
 }
 
 // ─── Props ────────────────────────────────────────────────────────────────────
@@ -575,8 +579,19 @@ export function MessageBubble({
           </div>
         )}
 
-        {/* AI 操作按钮 */}
-        {!isUser && AssistantActions}
+        {/* AI 操作按钮 + token 用量 */}
+        {!isUser && (
+          <div className="flex items-center justify-between">
+            {AssistantActions}
+            {msg.usage && (
+              <div className="flex items-center gap-1.5 opacity-40 group-hover:opacity-80 transition-opacity duration-200">
+                <span className="text-xs text-gray-400 dark:text-gray-500 select-none">
+                  ↑ {msg.usage.inputTokens.toLocaleString()} · ↓ {msg.usage.outputTokens.toLocaleString()} tokens
+                </span>
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

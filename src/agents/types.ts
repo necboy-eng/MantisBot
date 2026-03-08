@@ -38,6 +38,11 @@ export interface StreamChunk {
   agentId?: string;       // 调用 tool_use_id
   agentName?: string;     // subagent 的 key 名称
   phase?: 'start' | 'end'; // 调用阶段
+  // Token 用量（仅 complete 事件携带）
+  usage?: {
+    inputTokens: number;
+    outputTokens: number;
+  };
 }
 
 /**

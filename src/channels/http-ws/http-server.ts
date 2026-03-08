@@ -795,7 +795,8 @@ export async function createHTTPServer(options: HTTPServerOptions) {
           const doneData = {
             messageId: assistantMessage.id,
             attachments: chunk.attachments,
-            sessionName: session.name
+            sessionName: session.name,
+            usage: chunk.usage,
           };
           console.log('[HTTPServer] Sending done event with attachments:', chunk.attachments?.length || 0);
           res.write(`event: done\ndata: ${JSON.stringify(doneData)}\n\n`);

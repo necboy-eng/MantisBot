@@ -69,6 +69,11 @@ export interface StreamChunk {
   agentId?: string;
   agentName?: string;
   phase?: 'start' | 'end';
+  // Token 用量（仅 complete 事件携带）
+  usage?: {
+    inputTokens: number;
+    outputTokens: number;
+  };
 }
 
 export interface PermissionRequest {
@@ -1004,6 +1009,9 @@ export class ClaudeAgentRunner extends EventEmitter {
     let currentToolName = '';  // 当前正在执行的工具名称
     let currentToolArgs: Record<string, unknown> | undefined;  // 当前工具参数
     const toolIdToInfo = new Map<string, { name: string; args?: Record<string, unknown> }>();  // toolId -> { name, args } 映射
+    // 累加所有轮次的 token 用量
+    let totalInputTokens = 0;
+    let totalOutputTokens = 0;
 
     console.log('[ClaudeAgentRunner] streamRun started, loading SDK...');
 
@@ -1105,6 +1113,13 @@ export class ClaudeAgentRunner extends EventEmitter {
           // 处理消息内容
           const message = event.message || event;
           const contentArray = message?.content || [];
+
+          // 累加每轮 API 调用的 token 用量（result 事件只含最后一轮，此处才是完整来源）
+          if (message?.usage) {
+            totalInputTokens += message.usage.input_tokens ?? 0;
+            totalOutputTokens += message.usage.output_tokens ?? 0;
+            console.log(`[ClaudeAgentRunner] Usage (turn): input=${message.usage.input_tokens}, output=${message.usage.output_tokens}, cumulative: input=${totalInputTokens}, output=${totalOutputTokens}`);
+          }
 
           for (const block of contentArray) {
             // Claude Agent SDK 的 assistant 事件包含完整消息内容（非流式增量）
@@ -1325,7 +1340,18 @@ export class ClaudeAgentRunner extends EventEmitter {
           if (attachments.length > 0) {
             console.log('[ClaudeAgentRunner] Attachments:', JSON.stringify(attachments.map(a => ({ name: a.name, url: a.url }))));
           }
-          yield { type: 'complete', attachments: attachments.length > 0 ? attachments : undefined };
+          // 兜底：若 message_create 事件未提供 usage，则从 result 事件读取
+          if (event.usage && totalInputTokens === 0 && totalOutputTokens === 0) {
+            totalInputTokens = event.usage.input_tokens ?? 0;
+            totalOutputTokens = event.usage.output_tokens ?? 0;
+            console.log(`[ClaudeAgentRunner] Usage (result fallback): input=${totalInputTokens}, output=${totalOutputTokens}`);
+          } else if (event.usage) {
+            console.log(`[ClaudeAgentRunner] Usage already accumulated from turns (${totalInputTokens} in / ${totalOutputTokens} out), skipping result.usage`);
+          }
+          const usageData = (totalInputTokens > 0 || totalOutputTokens > 0)
+            ? { inputTokens: totalInputTokens, outputTokens: totalOutputTokens }
+            : undefined;
+          yield { type: 'complete', attachments: attachments.length > 0 ? attachments : undefined, usage: usageData };
           return;
         }
       }

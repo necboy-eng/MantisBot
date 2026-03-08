@@ -1959,6 +1959,15 @@ function App() {
                 ));
               }
 
+              // 处理 done 事件中的 token 用量
+              if (currentEvent === 'done' && parsed.usage) {
+                setStreamMessages(prev => prev.map(msg =>
+                  msg.id === currentAssistantMsgId
+                    ? { ...msg, usage: parsed.usage }
+                    : msg
+                ));
+              }
+
               // 处理 done 事件中的附件（如截图、send_file 发送的文件）
               // 复用 currentAssistantMsgId 确保附件添加到最后一个消息气泡
               if (currentEvent === 'done' && parsed.attachments) {
