@@ -137,6 +137,9 @@ interface Model {
   baseUrl?: string;
   baseURL?: string;
   endpoint?: string;
+  capabilities?: {
+    vision?: boolean;
+  };
 }
 
 interface TestResult {
@@ -161,6 +164,7 @@ export function ModelFormModal({ isOpen, onClose, model, onSave }: ModelFormModa
     model: '',
     apiKey: '',
     baseUrl: MODEL_PROVIDERS.openai.openai,
+    capabilities: undefined,
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -212,6 +216,7 @@ export function ModelFormModal({ isOpen, onClose, model, onSave }: ModelFormModa
         model: model.model,
         apiKey: model.apiKey || '',
         baseUrl: model.baseUrl || model.baseURL || model.endpoint || '',
+        capabilities: model.capabilities,
       });
     } else {
       // 新建模式：使用默认值
@@ -222,6 +227,7 @@ export function ModelFormModal({ isOpen, onClose, model, onSave }: ModelFormModa
         model: '',
         apiKey: '',
         baseUrl: MODEL_PROVIDERS.openai.openai,
+        capabilities: undefined,
       });
     }
     setError(null);
@@ -360,6 +366,10 @@ export function ModelFormModal({ isOpen, onClose, model, onSave }: ModelFormModa
         model: formData.model.trim(),
         apiKey: formData.apiKey?.trim() || undefined,
         baseUrl: formData.baseUrl?.trim() || undefined,
+        // 未勾选任何能力时省略整个 capabilities 字段
+        capabilities: formData.capabilities?.vision === true
+          ? { vision: true }
+          : undefined,
       };
 
       await onSave(modelToSave);
@@ -591,6 +601,34 @@ export function ModelFormModal({ isOpen, onClose, model, onSave }: ModelFormModa
                 ? '自定义端点必须填写'
                 : '留空使用提供商默认端点，或自定义端点'}
             </p>
+          </div>
+
+          {/* Model Capabilities */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+              模型能力
+            </label>
+            <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-3 space-y-2">
+              <label className="flex items-start gap-3 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={formData.capabilities?.vision === true}
+                  onChange={(e) => setFormData(prev => ({
+                    ...prev,
+                    capabilities: e.target.checked ? { vision: true } : undefined,
+                  }))}
+                  className="mt-0.5 w-4 h-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                />
+                <div>
+                  <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                    视觉理解（图像识别）
+                  </span>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                    支持分析图片内容（如 GPT-4o、Claude 3、Gemini Pro Vision 等）
+                  </p>
+                </div>
+              </label>
+            </div>
           </div>
 
           {/* Footer */}
