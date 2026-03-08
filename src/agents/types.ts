@@ -102,7 +102,8 @@ export interface IAgentRunner {
   respondToPermission?(
     requestId: string,
     approved: boolean,
-    updatedInput?: Record<string, unknown>
+    updatedInput?: Record<string, unknown>,
+    denyMessage?: string
   ): Promise<void>;
 
   /**

@@ -300,19 +300,50 @@ ${content}
         },
       });
 
+      // 非 Web 渠道（飞书/钉钉/Slack 等）无法弹窗，拦截 AskUserQuestion 权限请求：
+      // 将问题格式化为文本输出，并自动 deny 让 Agent 自行决策
+      const isNonWebPlatform = message.platform !== 'http' && message.platform !== 'web';
+      let askUserQuestionHandler: ((req: any) => void) | undefined;
+      if (isNonWebPlatform && typeof (this.agentRunner as any).on === 'function') {
+        askUserQuestionHandler = (req: any) => {
+          if (req.toolName === 'AskUserQuestion' || req.toolName === 'askuserquestion') {
+            // 格式化问题选项，记录日志供调试
+            const questions: any[] = req.toolInput?.questions || [];
+            if (questions.length > 0) {
+              const formatted = questions.map((q: any) => {
+                const opts = (q.options || []).map((o: any, i: number) => `  ${i + 1}. ${o.label} — ${o.description}`).join('\n');
+                return `${q.question}\n${opts}`;
+              }).join('\n\n');
+              console.log(`[DispatchStream] AskUserQuestion intercepted for non-web platform (${message.platform}), questions:\n${formatted}`);
+            }
+            // 自动 deny，告知 Agent 当前渠道不支持交互式问答，请自行判断
+            const denyMsg = '当前渠道（非 Web 环境）不支持交互式问答弹窗。请根据上下文直接做出最合理的判断并继续执行，无需等待用户选择。';
+            (this.agentRunner as any).respondToPermission?.(req.requestId, false, undefined, denyMsg);
+          }
+        };
+        (this.agentRunner as any).on('permissionRequest', askUserQuestionHandler);
+      }
+
       // 流式运行
       let fullResponse = '';
       const attachments: FileAttachment[] = [];
 
-      for await (const chunk of this.agentRunner.streamRun(prompt, history)) {
-        if (chunk.type === 'text' && chunk.content) {
-          fullResponse += chunk.content;
-          yield { type: 'text', content: chunk.content };
-        } else if (chunk.type === 'complete') {
-          // 收集附件
-          if (chunk.attachments) {
-            attachments.push(...chunk.attachments);
+      try {
+        for await (const chunk of this.agentRunner.streamRun(prompt, history)) {
+          if (chunk.type === 'text' && chunk.content) {
+            fullResponse += chunk.content;
+            yield { type: 'text', content: chunk.content };
+          } else if (chunk.type === 'complete') {
+            // 收集附件
+            if (chunk.attachments) {
+              attachments.push(...chunk.attachments);
+            }
           }
+        }
+      } finally {
+        // 清理事件监听器，避免内存泄漏
+        if (askUserQuestionHandler && typeof (this.agentRunner as any).off === 'function') {
+          (this.agentRunner as any).off('permissionRequest', askUserQuestionHandler);
         }
       }
 

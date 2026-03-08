@@ -177,10 +177,11 @@ export class UnifiedAgentRunner extends EventEmitter implements IAgentRunner {
   async respondToPermission(
     requestId: string,
     approved: boolean,
-    updatedInput?: Record<string, unknown>
+    updatedInput?: Record<string, unknown>,
+    denyMessage?: string
   ): Promise<void> {
     if (this.runner.respondToPermission) {
-      return this.runner.respondToPermission(requestId, approved, updatedInput);
+      return this.runner.respondToPermission(requestId, approved, updatedInput, denyMessage);
     }
     console.warn('[UnifiedRunner] respondToPermission not supported by underlying runner');
   }

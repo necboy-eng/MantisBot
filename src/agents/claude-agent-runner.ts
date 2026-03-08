@@ -411,7 +411,8 @@ export class ClaudeAgentRunner extends EventEmitter {
   async respondToPermission(
     requestId: string,
     approved: boolean,
-    updatedInput?: Record<string, unknown>
+    updatedInput?: Record<string, unknown>,
+    denyMessage?: string
   ): Promise<void> {
     const pending = this.pendingPermissions.get(requestId);
     if (!pending) {
@@ -444,7 +445,7 @@ export class ClaudeAgentRunner extends EventEmitter {
       this.permissionOriginalInputs.delete(requestId);
       pending.resolve({
         behavior: 'deny',
-        message: 'Permission denied by user',
+        message: denyMessage || 'Permission denied by user',
       });
     }
   }
@@ -908,8 +909,11 @@ export class ClaudeAgentRunner extends EventEmitter {
         if (resolvedName === 'AskUserQuestion' || resolvedName === 'askuserquestion') {
           console.log('[ClaudeAgentRunner] AskUserQuestion requires user interaction, sending permission request');
           const permissionRequest = this.createPermissionRequest(resolvedName, resolvedInput);
+          // 必须先 waitForPermission（同步注册到 pendingPermissions），再 emit 事件
+          // 否则监听器里调用 respondToPermission 时 pendingPermissions 还没有该 requestId
+          const resultPromise = this.waitForPermission(permissionRequest.requestId);
           this.emit('permissionRequest', permissionRequest);
-          const result = await this.waitForPermission(permissionRequest.requestId);
+          const result = await resultPromise;
           return result;
         }
 
@@ -926,8 +930,9 @@ export class ClaudeAgentRunner extends EventEmitter {
         if (approvalMode === 'ask') {
           console.log('[ClaudeAgentRunner] Asking permission for all tools (mode=ask):', resolvedName);
           const permissionRequest = this.createPermissionRequest(resolvedName, resolvedInput);
+          const resultPromise = this.waitForPermission(permissionRequest.requestId);
           this.emit('permissionRequest', permissionRequest);
-          const result = await this.waitForPermission(permissionRequest.requestId);
+          const result = await resultPromise;
           return result;
         }
 
@@ -939,8 +944,9 @@ export class ClaudeAgentRunner extends EventEmitter {
           if (this.isDangerousBashCommand(command)) {
             console.log('[ClaudeAgentRunner] Dangerous bash command (mode=dangerous):', command.slice(0, 100));
             const permissionRequest = this.createPermissionRequest(resolvedName, resolvedInput);
+            const resultPromise = this.waitForPermission(permissionRequest.requestId);
             this.emit('permissionRequest', permissionRequest);
-            const result = await this.waitForPermission(permissionRequest.requestId);
+            const result = await resultPromise;
             return result;
           }
           console.log('[ClaudeAgentRunner] Safe bash command, allowing:', resolvedName);
@@ -952,12 +958,14 @@ export class ClaudeAgentRunner extends EventEmitter {
           console.log('[ClaudeAgentRunner] Delete tool detected (mode=dangerous):', resolvedName);
           const permissionRequest = this.createPermissionRequest(resolvedName, resolvedInput);
 
+          // 先注册到 pendingPermissions，再发出事件（避免竞争）
+          const resultPromise = this.waitForPermission(permissionRequest.requestId);
           // 通过事件发出权限请求（供外部监听）
           this.emit('permissionRequest', permissionRequest);
 
           // 等待用户响应
           console.log('[ClaudeAgentRunner] Waiting for permission response, requestId:', permissionRequest.requestId);
-          const result = await this.waitForPermission(permissionRequest.requestId);
+          const result = await resultPromise;
           console.log('[ClaudeAgentRunner] Permission result:', result);
           return result;
         }

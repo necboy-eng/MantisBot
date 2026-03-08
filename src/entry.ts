@@ -262,8 +262,8 @@ export async function main(): Promise<void> {
           // 调用 channel 的流式发送方法
           for await (const _ of (channel as any).sendWithStream(
             message.chatId,
-            message.userId,
-            generator
+            generator,
+            message.userId
           )) {
             // 消费 generator
           }
