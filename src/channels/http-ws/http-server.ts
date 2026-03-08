@@ -14,11 +14,11 @@ import type { SessionManager } from '../../session/manager.js';
 import type { ToolRegistry } from '../../agents/tools/registry.js';
 import { getConfig, loadConfig, saveConfig } from '../../config/loader.js';
 import type { Config, EmailAccount, EmailConfig, AgentTeam } from '../../config/schema.js';
-import { AgentTeamSchema } from '../../config/schema.js';
+import { AgentTeamSchema, modelSupportsVision } from '../../config/schema.js';
 import { PRESET_TEAMS } from '../../agents/agent-teams.js';
 import { createAuthMiddleware, computeToken, hashPassword, verifyPassword } from './auth-middleware.js';
 import { EMAIL_PROVIDERS } from '../../config/schema.js';
-import type { Message } from '../../types.js';
+import type { Message, FileAttachment } from '../../types.js';
 // AgentRunner 已移除，统一使用 ClaudeAgentRunner
 import { getFileStorage } from '../../files/index.js';
 import { getLLMClient, clearLLMClientCache } from '../../agents/llm-client.js';
@@ -459,7 +459,7 @@ export async function createHTTPServer(options: HTTPServerOptions) {
   // SSE Stream Chat endpoint
   app.post('/api/chat/stream', async (req, res): Promise<void> => {
     try {
-      const { sessionId, message, model, teamId } = req.body;
+      const { sessionId, message, model, teamId, attachments: userAttachments } = req.body;
 
       if (!message) {
         res.status(400).json({ error: 'Message is required' });
@@ -681,8 +681,60 @@ export async function createHTTPServer(options: HTTPServerOptions) {
         }
       }
 
+      // ── 视觉路由：图片附件检测与模型切换 ─────────────────────────────────
+      // 检查是否有图片附件
+      const incomingAttachments: FileAttachment[] = Array.isArray(userAttachments) ? userAttachments : [];
+      const hasImageAttachment = incomingAttachments.some(
+        (a: FileAttachment) => a.mimeType?.startsWith('image/')
+      );
+
+      // 是否需要临时视觉 runner（图片存在且当前模型不支持视觉）
+      let visionRunner: import('../../agents/unified-runner.js').UnifiedAgentRunner | null = null;
+      let visionSwitchNotice = '';
+
+      if (hasImageAttachment) {
+        const currentModelConfig = (config.models as any[]).find((m: any) => m.name === modelName);
+        const currentSupportsVision = currentModelConfig ? modelSupportsVision(currentModelConfig) : false;
+
+        if (!currentSupportsVision) {
+          // 查找第一个支持视觉的模型
+          const visionModel = (config.models as any[]).find(
+            (m: any) => m.enabled !== false && modelSupportsVision(m)
+          );
+
+          if (visionModel) {
+            console.log(`[HTTPServer] Vision routing: switching from ${modelName} to ${visionModel.name} for image analysis`);
+            const cwd = workDirManager.getCurrentWorkDir();
+            visionRunner = new UnifiedAgentRunner(options.toolRegistry, {
+              model: visionModel.name,
+              maxIterations: 0,
+              approvalMode: session.approvalMode || 'dangerous',
+              skillsLoader: options.skillsLoader,
+              cwd,
+            });
+            visionSwitchNotice = `🔍 已自动切换到 **${visionModel.name}** 进行图像分析`;
+          } else {
+            // 没有可用视觉模型，直接返回友好提示并终止
+            console.warn('[HTTPServer] Vision routing: no vision-capable model found');
+            res.write(`event: chunk\ndata: ${JSON.stringify({ content: '⚠️ 当前没有支持图像识别的模型。请在「设置 → 模型配置」中为某个模型开启「视觉理解」能力后重试。' })}\n\n`);
+            res.write(`event: done\ndata: ${JSON.stringify({ messageId: uuidv4(), attachments: undefined })}\n\n`);
+            res.end();
+            return;
+          }
+        }
+      }
+
+      // 如果需要临时视觉 runner，替换本次使用的 runner（不影响会话）
+      const effectiveRunner = visionRunner ?? agentRunner;
+      // ─────────────────────────────────────────────────────────────────────
+
       // Stream process
-      for await (const chunk of agentRunner.streamRun(contextualMessage, history)) {
+      if (visionSwitchNotice) {
+        res.write(`event: system\ndata: ${JSON.stringify({ content: visionSwitchNotice })}\n\n`);
+        (res as any).flush?.();
+      }
+
+      for await (const chunk of effectiveRunner.streamRun(contextualMessage, history)) {
         const chunkAny = chunk as any;
 
         // 思考过程事件 - 流式输出思考内容
@@ -809,6 +861,12 @@ export async function createHTTPServer(options: HTTPServerOptions) {
       }
 
       res.end();
+
+      // 临时视觉 runner 用完即释放（不影响会话状态）
+      if (visionRunner) {
+        visionRunner.dispose?.();
+        console.log('[HTTPServer] Vision runner disposed');
+      }
     } catch (error: any) {
       console.error('[HTTPServer] Stream chat error:', error?.message || error, error?.stack);
       res.write(`event: error\ndata: ${JSON.stringify({ error: 'Internal server error', detail: error?.message })}\n\n`);

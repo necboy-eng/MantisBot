@@ -161,6 +161,10 @@ export const ModelConfigSchema = z.object({
   endpoint: z.string().optional(),
   // 是否启用（禁用后 UI 上灰显，但配置保留）- undefined 视为 true
   enabled: z.boolean().optional(),
+  // 模型能力标记（需手动配置，不自动推断）
+  capabilities: z.object({
+    vision: z.boolean().optional(),
+  }).optional(),
 });
 
 export const FeishuConfigSchema = z.object({
@@ -583,3 +587,11 @@ export type SlackConfig = z.infer<typeof SlackConfigSchema>;
 export type StorageProviderConfig = z.infer<typeof StorageProviderSchema>;
 export type StorageConfig = z.infer<typeof StorageSchema>;
 export type ReliabilityConfig = z.infer<typeof ConfigSchema>['reliability'];
+
+/**
+ * 判断模型是否支持视觉理解（图像识别）
+ * 仅当 capabilities.vision 显式设为 true 时才视为支持
+ */
+export function modelSupportsVision(mc: ModelConfig): boolean {
+  return mc.capabilities?.vision === true;
+}

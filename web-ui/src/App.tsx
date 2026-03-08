@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { MessageCircle, Settings, Plus, Bot, FileText, Download, Image, Trash2, ExternalLink, Clock, LayoutDashboard, Wifi, FolderOpen, Square, CheckSquare, LogOut, Star, ChevronDown, ChevronRight, ChevronLeft, Terminal, MessageSquare, Slack, Phone, MessageCircleCode, Globe } from 'lucide-react';
+import { MessageCircle, Settings, Plus, Bot, FileText, Download, Image, Trash2, ExternalLink, Clock, LayoutDashboard, Wifi, FolderOpen, Square, CheckSquare, LogOut, Star, ChevronDown, ChevronRight, ChevronLeft, Terminal, MessageSquare, Slack, Phone, MessageCircleCode, Globe, Paperclip, X as XIcon } from 'lucide-react';
 import { CanvasPanel, FileItem, BrowserSnapshot, TerminalOutput, SearchUrlList } from './components/CanvasPanel';
 import { CronPanel } from './components/CronPanel';
 import { TunnelPanel } from './components/TunnelPanel';
@@ -318,6 +318,7 @@ function App() {
 
   // textarea 引用(用于自动调整高度)
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const attachmentInputRef = useRef<HTMLInputElement>(null);
 
   // 停止对话相关
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -370,6 +371,9 @@ function App() {
 
   // 统一上下文引用状态（NAS 文件 + 邮件）
   const [fileReferences, setFileReferences] = useState<ContextReference[]>([]);
+
+  // 待发送附件（用户在输入框上传、发送后清空）
+  const [pendingAttachments, setPendingAttachments] = useState<FileAttachment[]>([]);
 
   // 设置面板状态
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -1548,6 +1552,10 @@ function App() {
     setInput('');
     setLoading(true);
 
+    // 捕获并清空待发附件
+    const attachmentsToSend = [...pendingAttachments];
+    setPendingAttachments([]);
+
     // 捕获当前会话 ID，用于流式消息缓存（支持切换会话后再切回时恢复状态）
     const streamSessionId = currentSession!;
     // 初始化流式缓存（快照当前消息列表）
@@ -1657,6 +1665,7 @@ function App() {
           sessionId: currentSession,
           message: fullMessage,
           model: selectedModel,
+          ...(attachmentsToSend.length > 0 ? { attachments: attachmentsToSend } : {}),
           ...(selectedTeamId ? { teamId: selectedTeamId } : {})
         }),
         signal: abortController.signal
@@ -2672,6 +2681,25 @@ function App() {
             onClear={clearFileReferences}
           />
 
+          {/* 待发附件预览 */}
+          {pendingAttachments.length > 0 && (
+            <div className="flex flex-wrap gap-2 mb-2 px-1">
+              {pendingAttachments.map((att) => (
+                <div key={att.id} className="relative group flex items-center gap-1.5 pl-2 pr-1 py-1 bg-gray-100 dark:bg-gray-700 rounded-lg text-xs text-gray-600 dark:text-gray-300">
+                  <Image className="w-3.5 h-3.5 flex-shrink-0 text-blue-500" />
+                  <span className="max-w-[120px] truncate">{att.name}</span>
+                  <button
+                    type="button"
+                    onClick={() => setPendingAttachments(prev => prev.filter(a => a.id !== att.id))}
+                    className="ml-0.5 p-0.5 rounded hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
+                  >
+                    <XIcon className="w-3 h-3" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
           {/* Active Skill Indicator - 更明显的样式 */}
           {activeSkill && (
             <div className="mb-2 px-4 py-3 bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-blue-900/40 dark:to-indigo-900/40 border-2 border-blue-300 dark:border-blue-700 rounded-lg flex items-center gap-3 animate-pulse shadow-md">
@@ -2764,18 +2792,46 @@ function App() {
                   )}
                 </div>
 
-                {/* 右侧：📎 占位 + 发送/停止按钮 */}
+                {/* 右侧：📎 文件上传 + 发送/停止按钮 */}
                 <div className="flex items-center gap-1.5">
-                  {/* 附件占位按钮 */}
+                  {/* 附件上传按钮 */}
+                  <input
+                    ref={attachmentInputRef}
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    className="hidden"
+                    onChange={async (e) => {
+                      const files = Array.from(e.target.files || []);
+                      if (!files.length) return;
+                      for (const file of files) {
+                        const base64 = await new Promise<string>((resolve) => {
+                          const reader = new FileReader();
+                          reader.onload = () => resolve((reader.result as string).split(',')[1]);
+                          reader.readAsDataURL(file);
+                        });
+                        const res = await authFetch('/api/files', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ filename: file.name, content: base64, mimeType: file.type }),
+                        });
+                        if (res.ok) {
+                          const attachment: FileAttachment = await res.json();
+                          setPendingAttachments(prev => [...prev, attachment]);
+                        }
+                      }
+                      // 清空 input 以允许重复选同一文件
+                      e.target.value = '';
+                    }}
+                  />
                   <button
                     type="button"
-                    disabled
-                    className="p-1.5 rounded-lg text-gray-300 dark:text-gray-600 cursor-not-allowed"
-                    title="附件（暂不支持）"
+                    disabled={loading}
+                    onClick={() => attachmentInputRef.current?.click()}
+                    className="p-1.5 rounded-lg text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                    title="上传图片"
                   >
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.586-6.586a4 4 0 00-5.656-5.656L5.757 10.757a6 6 0 108.486 8.486L20 13" />
-                    </svg>
+                    <Paperclip className="w-4 h-4" />
                   </button>
 
                   {/* 斜杠命令提示按钮 */}
