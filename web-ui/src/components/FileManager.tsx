@@ -18,6 +18,8 @@ interface FileManagerProps {
   onAddReference?: (item: FileSystemItem) => void;
   // 新增：权限错误回调
   onPermissionError?: (path: string, onSuccess: () => void) => void;
+  // 新增：存储模式切换回调（true = NAS 模式，false = 本地模式）
+  onStorageModeChange?: (isNas: boolean) => void;
 }
 
 interface FileSystemItem {
@@ -27,6 +29,7 @@ interface FileSystemItem {
   size?: number;
   modified?: string;
   ext?: string;
+  storageId?: string;  // 当前存储提供者 ID（NAS 时有值，本地时为 undefined）
 }
 
 // 格式化文件大小
@@ -87,8 +90,9 @@ export function FileManager({
   onPathChange,
   officePreviewServer,
   serverUrl,
-  onAddReference,  // 新增
-  onPermissionError  // 新增：权限错误回调
+  onAddReference,
+  onPermissionError,
+  onStorageModeChange,
 }: FileManagerProps) {
   const [viewMode, setViewMode] = useState<ViewMode>('list');  // 默认使用列表视图
   const [currentPath, setCurrentPath] = useState(initialPath);  // 使用 initialPath 初始化
@@ -103,10 +107,16 @@ export function FileManager({
   const [showStorageSelector, setShowStorageSelector] = useState(false);
   const [sortField, setSortField] = useState<SortField>('name');
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
+  // 当前活跃的存储提供者 ID（null = 本地文件系统，有值 = NAS）
+  const [currentStorageId, setCurrentStorageId] = useState<string | null>(null);
+  // 当前 NAS 的本地挂载路径（自动挂载或手动配置的 localMountPath）
+  const [currentMountPath, setCurrentMountPath] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dropZoneRef = useRef<HTMLDivElement>(null);
   const dragCounterRef = useRef(0);
+  // 请求版本号：切换存储时递增，让旧的 in-flight 请求响应被丢弃
+  const loadGenerationRef = useRef(0);
 
   // 右键菜单状态
   const [contextMenu, setContextMenu] = useState<{
@@ -155,9 +165,13 @@ export function FileManager({
 
   // 加载目录
   const loadDirectory = useCallback(async (dirPath: string) => {
+    const generation = loadGenerationRef.current;
     setLoading(true);
     try {
       const res = await authFetch(`/api/explore/list?path=${encodeURIComponent(dirPath)}`);
+
+      // 如果在请求飞行期间存储已切换，丢弃此响应
+      if (loadGenerationRef.current !== generation) return;
 
       // 检查是否有权限错误
       if (res.status === 403) {
@@ -176,6 +190,10 @@ export function FileManager({
       }
 
       const data = await res.json();
+
+      // 再次检查（res.json() 也是异步的，期间 generation 可能已改变）
+      if (loadGenerationRef.current !== generation) return;
+
       setItems(data.items || []);
       const newPath = data.currentPath || dirPath;
       setCurrentPath(newPath);
@@ -191,7 +209,10 @@ export function FileManager({
     } catch (error) {
       console.error('Failed to load directory:', error);
     } finally {
-      setLoading(false);
+      // 只有当前 generation 的请求才清除 loading 状态
+      if (loadGenerationRef.current === generation) {
+        setLoading(false);
+      }
     }
   }, [history, historyIndex, onPathChange, onPermissionError]);
 
@@ -201,6 +222,16 @@ export function FileManager({
       loadDirectory(initialPath);
       setCurrentPath(initialPath);
     }
+    // 初始化时从后端恢复当前存储状态（包括挂载路径）
+    authFetch('/api/storage/current').then(async res => {
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.id !== '__local__' && data.localMountPath) {
+        setCurrentStorageId(data.id);
+        setCurrentMountPath(data.localMountPath);
+        onStorageModeChange?.(true);
+      }
+    }).catch(() => { /* ignore */ });
   }, [initialPath]);
 
   // 导航到目录
@@ -322,10 +353,32 @@ export function FileManager({
     }
   };
 
+  // 将 NAS 相对路径转换为本地挂载路径
+  // 例：/upload/file.pdf + /Volumes/Download → /Volumes/Download/upload/file.pdf
+  const toLocalPath = (nasPath: string): string => {
+    console.log('[FileManager] toLocalPath', { nasPath, currentMountPath });
+    if (!currentMountPath) return nasPath;
+    const base = currentMountPath.replace(/\/$/, '');
+    const rel = nasPath.startsWith('/') ? nasPath : '/' + nasPath;
+    return base + rel;
+  };
+
   // 处理存储切换
-  const handleStorageChanged = (providerId: string) => {
-    // 存储切换后重新加载当前目录
-    loadDirectory(currentPath);
+  const handleStorageChanged = (providerId: string, mountPath?: string) => {    // 使所有 in-flight 的旧请求失效，避免切换后被旧响应覆盖路径
+    loadGenerationRef.current++;
+    // 记录当前存储（__local__ 视为本地，NAS 保存 providerId）
+    setCurrentStorageId(providerId === '__local__' ? null : providerId);
+    // 保存本地挂载路径（切换到本地时清空）
+    const newMountPath = providerId === '__local__' ? null : (mountPath ?? null);
+    console.log('[FileManager] handleStorageChanged', { providerId, mountPath, newMountPath });
+    setCurrentMountPath(newMountPath);
+    // 立即重置 UI，不等待异步加载（先更新内部状态，再通知父组件，避免重渲染影响 loadDirectory 闭包）
+    setCurrentPath('/');
+    setItems([]);
+    loadDirectory('/');
+    onPathChange?.('/');
+    // 通知父组件当前是否进入 NAS 模式（避免父组件把 NAS 相对路径当本地 workdir 同步）
+    onStorageModeChange?.(providerId !== '__local__');
     showToast(`已切换到存储: ${providerId}`, 'success');
   };
 
@@ -436,7 +489,7 @@ export function FileManager({
         await handleDownload(item);
         break;
       case 'addToChat':
-        onAddReference?.(item);
+        onAddReference?.({ ...item, path: toLocalPath(item.path), storageId: currentStorageId ?? undefined });
         break;
       case 'delete':
         setDeleteDialog({ visible: true, item, step: 'confirm', inputValue: '' });
@@ -971,6 +1024,18 @@ export function FileManager({
           />
         </div>
 
+        {/* 刷新按钮 */}
+        <button
+          onClick={() => loadDirectory(currentPath)}
+          disabled={loading}
+          className="p-1.5 rounded hover:bg-gray-200 dark:hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed"
+          title="刷新"
+        >
+          <svg className={`w-4 h-4 dark:text-white ${loading ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+          </svg>
+        </button>
+
         {/* 存储选择器按钮 */}
         <div className="relative">
           <button
@@ -998,8 +1063,8 @@ export function FileManager({
               {/* 下拉面板 */}
               <div className="absolute top-full left-0 mt-1 w-80 bg-white dark:bg-gray-800 border dark:border-gray-600 rounded-lg shadow-lg z-20 p-4">
                 <StorageSelector
-                  onStorageChanged={(providerId) => {
-                    handleStorageChanged(providerId);
+                  onStorageChanged={(providerId, mountPath) => {
+                    handleStorageChanged(providerId, mountPath);
                     setShowStorageSelector(false);
                   }}
                 />
@@ -1228,8 +1293,9 @@ export function FileManager({
                     closeContextMenu();
                     onAddReference?.({
                       name: currentPath.split('/').pop() || '/',
-                      path: currentPath,
-                      type: 'directory'
+                      path: toLocalPath(currentPath),
+                      type: 'directory',
+                      storageId: currentStorageId ?? undefined
                     });
                   }}
                   className="w-full px-4 py-2 text-left hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2 dark:text-white"

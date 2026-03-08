@@ -33,6 +33,8 @@ export interface StorageConfig {
   password?: string;
   basePath?: string;
   timeout?: number;
+  // 本地挂载路径（NAS 已通过操作系统挂载时有效）
+  localMountPath?: string;
 
   // SMB 专用配置（运行时填充）
   share?: string;    // SMB 共享路径

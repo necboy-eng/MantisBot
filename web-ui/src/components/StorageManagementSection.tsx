@@ -23,12 +23,13 @@ interface StorageProvider {
   type: 'local' | 'nas';
   connected: boolean;
   enabled: boolean;
+  protocol?: 'webdav' | 'smb';
   // Local storage
   path?: string;
   // NAS storage
   url?: string;
   username?: string;
-  password?: string;
+  hasPassword?: boolean;
   basePath?: string;
   timeout?: number;
 }
@@ -294,28 +295,6 @@ export function StorageManagementSection() {
         </div>
       )}
 
-      {/* 当前存储状态 */}
-      {currentProvider && (
-        <div className="mb-6 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              {getStorageIcon(currentProvider.type)}
-              <div>
-                <div className="font-medium text-blue-900 dark:text-blue-100">{currentProvider.name}</div>
-                <div className="text-sm text-blue-700 dark:text-blue-300">
-                  {currentProvider.type === 'local' ? t('storage.localType') : t('storage.nasType')} • {t('storage.currentlyActive')}
-                </div>
-              </div>
-              {currentProvider.connected ? (
-                <CheckCircle className="w-5 h-5 text-green-600 dark:text-green-400" />
-              ) : (
-                <AlertCircle className="w-5 h-5 text-red-600 dark:text-red-400" />
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* 存储提供者列表 */}
       <div className="space-y-4">
         {providers.length === 0 ? (
@@ -365,8 +344,8 @@ export function StorageManagementSection() {
                         </div>
                         <div className="text-sm text-gray-600 dark:text-gray-400">
                           {provider.type === 'local'
-                            ? `${t('storage.localType')} • ${provider.path}`
-                            : `${t('storage.nasType')} • ${provider.url}`
+                            ? `${t('storage.localType')} • ${provider.path || provider.id}`
+                            : `${t('storage.nasType')} • ${provider.protocol?.toUpperCase() ?? 'NAS'} • ${provider.url || provider.id}`
                           }
                         </div>
                       </div>

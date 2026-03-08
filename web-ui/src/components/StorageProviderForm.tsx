@@ -16,6 +16,11 @@ interface StorageProvider {
   protocol?: 'webdav' | 'smb';
   basePath?: string;
   timeout?: number;
+  // SMB 专属字段
+  domain?: string;  // Windows AD 域（可选，格式：DOMAIN）
+  share?: string;   // SMB 共享名（从 URL 中解析，也可单独填写）
+  // 本地挂载路径（可选）
+  localMountPath?: string;
 }
 
 interface StorageProviderFormProps {
@@ -38,6 +43,7 @@ interface ValidationErrors {
   protocol?: string;
   basePath?: string;
   timeout?: string;
+  domain?: string;
 }
 
 export function StorageProviderForm({
@@ -58,7 +64,6 @@ export function StorageProviderForm({
     username: '',
     password: '',
     protocol: 'smb',  // 默认使用 SMB 协议
-    basePath: '/',
     timeout: 30000
   });
 
@@ -88,7 +93,6 @@ export function StorageProviderForm({
           username: '',
           password: '',
           protocol: 'smb',  // NAS 类型默认使用 SMB 协议
-          basePath: '/uploads',
           timeout: 30000
         });
       }
@@ -133,9 +137,16 @@ export function StorageProviderForm({
       if (!formData.url || !formData.url.trim()) {
         newErrors.url = t('storage.validation.urlRequired');
       } else if (formData.protocol === 'smb') {
-        // SMB 协议格式: smb://host/share 或 //host/share
-        // 检查是否包含至少一个 /（用于分隔 host 和 share）
-        if (!formData.url.includes('/')) {
+        // SMB 格式: smb://host/share 或 //host/share（必须包含 share 名）
+        let smbUrl = formData.url.trim();
+        if (!smbUrl.includes('://')) smbUrl = 'smb:' + smbUrl;
+        try {
+          const parsed = new URL(smbUrl);
+          const shareParts = parsed.pathname.split('/').filter(Boolean);
+          if (shareParts.length === 0) {
+            newErrors.url = t('storage.validation.smbShareRequired', '请填写共享名，格式：smb://192.168.1.100/共享名');
+          }
+        } catch {
           newErrors.url = t('storage.validation.urlInvalid');
         }
       } else {
@@ -326,7 +337,7 @@ export function StorageProviderForm({
               {/* NAS URL */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                  {formData.protocol === 'smb' ? 'Share Path (SMB)' : t('storage.url')} *
+                  {formData.protocol === 'smb' ? t('storage.smbSharePath', 'SMB 共享路径') : t('storage.url')} *
                 </label>
                 <input
                   type="text"
@@ -334,13 +345,18 @@ export function StorageProviderForm({
                   onChange={(e) => updateField('url', e.target.value)}
                   placeholder={
                     formData.protocol === 'smb'
-                      ? t('storage.placeholder.smbShare', '例如：//192.168.1.100/share')
+                      ? t('storage.placeholder.smbShare', 'smb://192.168.1.100/共享名')
                       : t('storage.placeholder.url')
                   }
                   className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 transition-colors dark:bg-gray-800 dark:border-gray-700 ${
                     errors.url ? 'border-red-500 focus:ring-red-500' : 'border-gray-300 dark:border-gray-600'
                   }`}
                 />
+                {formData.protocol === 'smb' && !errors.url && (
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                    {t('storage.smbShareHint', '格式：smb://IP地址/共享名，例如 smb://192.168.1.100/documents')}
+                  </p>
+                )}
                 {errors.url && <p className="text-xs text-red-600 dark:text-red-400 mt-1">{errors.url}</p>}
               </div>
 
@@ -360,6 +376,26 @@ export function StorageProviderForm({
                 />
                 {errors.username && <p className="text-xs text-red-600 dark:text-red-400 mt-1">{errors.username}</p>}
               </div>
+
+              {/* SMB Domain（仅 SMB 协议显示，可选） */}
+              {formData.protocol === 'smb' && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                    {t('storage.domain', 'Windows Domain')}
+                    <span className="text-xs text-gray-400 ml-1">{t('storage.optional', '(optional)')}</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={formData.domain || ''}
+                    onChange={(e) => updateField('domain', e.target.value)}
+                    placeholder={t('storage.placeholder.domain', 'e.g. WORKGROUP or corp.example.com')}
+                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 transition-colors dark:bg-gray-800"
+                  />
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                    {t('storage.domainHint', 'Required for Active Directory / domain-joined NAS. Leave blank for standalone servers.')}
+                  </p>
+                </div>
+              )}
 
               {/* 密码 */}
               <div>
@@ -388,23 +424,6 @@ export function StorageProviderForm({
                 {errors.password && <p className="text-xs text-red-600 dark:text-red-400 mt-1">{errors.password}</p>}
               </div>
 
-              {/* 基础路径 */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                  {t('storage.basePath')}
-                </label>
-                <input
-                  type="text"
-                  value={formData.basePath || ''}
-                  onChange={(e) => updateField('basePath', e.target.value)}
-                  placeholder={t('storage.placeholder.basePath')}
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 transition-colors dark:bg-gray-800"
-                />
-                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                  {t('storage.validation.optional', 'Optional. Directory on NAS to use as root.')}
-                </p>
-              </div>
-
               {/* 超时设置 */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
@@ -422,6 +441,29 @@ export function StorageProviderForm({
                   }`}
                 />
                 {errors.timeout && <p className="text-xs text-red-600 dark:text-red-400 mt-1">{errors.timeout}</p>}
+              </div>
+
+              {/* 本地挂载路径（可选） */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                  本地挂载路径
+                  <span className="text-xs text-gray-400 ml-1">(可选)</span>
+                </label>
+                <input
+                  type="text"
+                  value={formData.localMountPath || ''}
+                  onChange={(e) => updateField('localMountPath', e.target.value)}
+                  placeholder={
+                    navigator.platform.startsWith('Win')
+                      ? '例：Z:\\ 或 \\\\192.168.1.100\\share'
+                      : '例：/Volumes/MyNAS 或 /mnt/nas'
+                  }
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 transition-colors dark:bg-gray-800"
+                />
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                  若已通过操作系统将 NAS 挂载为本地目录（macOS Finder 连接服务器、Windows 映射网络驱动器），
+                  填入该本地路径后，AI 可直接以本地文件方式读写 NAS 文件，无需通过 SMB/WebDAV 协议。
+                </p>
               </div>
             </>
           )}

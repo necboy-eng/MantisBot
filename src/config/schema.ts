@@ -287,7 +287,11 @@ export const StorageProviderSchema = z.object({
   username: z.string().optional(),
   password: z.string().optional(),
   basePath: z.string().optional(),
-  timeout: z.number().positive().optional().default(30000)
+  timeout: z.number().positive().optional().default(30000),
+  // 本地挂载路径（可选）：当 NAS 已通过操作系统挂载为本地目录时填写
+  // macOS 例：/Volumes/MyNAS；Windows 例：Z:\；Linux 例：/mnt/nas
+  // 设置后切换到此存储时 Agent 将直接使用本地文件系统路径访问，无需经过 SMB/WebDAV
+  localMountPath: z.string().optional()
 }).refine(
   (data) => {
     if (data.type === 'local') {

@@ -11,6 +11,16 @@ import {
 } from './storage.interface.js';
 import { LocalStorage } from './local-storage.js';
 import { NasStorage } from './nas-storage.js';
+import { SmbStorage } from './smb-storage.js';
+
+function createStorage(config: StorageConfig): IStorage {
+  if (config.type === 'local') return new LocalStorage(config);
+  if (config.type === 'nas') {
+    if (config.protocol === 'smb') return new SmbStorage(config);
+    return new NasStorage(config);
+  }
+  throw new StorageError(`Unsupported storage type: ${config.type}`, 'INVALID_CONFIG');
+}
 
 export interface StorageInfo {
   id: string;
@@ -39,19 +49,9 @@ export class StorageManager {
       }
 
       try {
-        let storage: IStorage;
-
-        if (providerConfig.type === 'local') {
-          storage = new LocalStorage(providerConfig);
-        } else if (providerConfig.type === 'nas') {
-          storage = new NasStorage(providerConfig);
-        } else {
-          console.warn(`[StorageManager] Unknown storage type: ${providerConfig.type}`);
-          continue;
-        }
-
+        const storage = createStorage(providerConfig);
         this.registerStorage(providerConfig.id, storage);
-        console.log(`[StorageManager] Registered storage: ${providerConfig.id} (${providerConfig.type})`);
+        console.log(`[StorageManager] Registered storage: ${providerConfig.id} (${providerConfig.type}/${providerConfig.protocol || 'local'})`);
       } catch (error) {
         console.error(`[StorageManager] Failed to create storage '${providerConfig.id}':`, error);
       }
@@ -238,4 +238,8 @@ export function getStorageManager(): StorageManager {
 
 export function hasStorageManager(): boolean {
   return globalStorageManager !== null;
+}
+
+export function clearStorageManager(): void {
+  globalStorageManager = null;
 }

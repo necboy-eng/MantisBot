@@ -10,6 +10,7 @@ interface BaseReference {
 export interface NasReference extends BaseReference {
   source: 'nas';
   path: string;
+  storageId?: string;  // 存储提供者 ID（预留，暂未使用）
   type: 'file' | 'directory';
   size?: number;
   ext?: string;

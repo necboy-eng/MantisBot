@@ -505,13 +505,14 @@ function App() {
   }, [activeSkill]);
 
   // 添加 NAS 文件引用（防止重复）
-  const addFileReference = (item: { path: string; name: string; type: 'file' | 'directory'; size?: number; ext?: string }) => {
+  const addFileReference = (item: { path: string; name: string; type: 'file' | 'directory'; size?: number; ext?: string; storageId?: string }) => {
     setFileReferences(prev => {
       if (prev.some(ref => ref.source === 'nas' && ref.path === item.path)) return prev;
       const ref: NasReference = {
         source: 'nas',
         id: generateUUID(),
         path: item.path,
+        storageId: item.storageId ?? '__local__',
         name: item.name,
         type: item.type,
         size: item.size,
@@ -685,18 +686,29 @@ function App() {
   };
 
   // 获取用户主目录（鉴权确认后才请求）
+  // NAS 启动时可能连接稍慢，第一次返回本地 home 后延迟重查一次，确保 NAS 模式下拿到 '/'
   useEffect(() => {
     if (!isAuthenticated) return;
-    authFetch('/api/explore/home')
-      .then(res => res.json())
-      .then(data => {
-        if (data.home) {
-          setHomeDirectory(data.home);
-        }
-      })
-      .catch(err => {
-        console.error('Failed to get home directory:', err);
-      });
+    const fetchHome = () =>
+      authFetch('/api/explore/home')
+        .then(res => res.json())
+        .then(data => {
+          if (data.home) {
+            setHomeDirectory(data.home);
+          }
+          return data.home as string;
+        })
+        .catch(err => {
+          console.error('Failed to get home directory:', err);
+          return null;
+        });
+
+    fetchHome().then(home => {
+      // 如果返回的是本地绝对路径（非 '/'），说明 NAS 可能还没连上，2s 后重查一次
+      if (home && home !== '/') {
+        setTimeout(() => fetchHome(), 2000);
+      }
+    });
   }, [isAuthenticated]);
 
   // 获取当前工作目录（鉴权确认后才请求）

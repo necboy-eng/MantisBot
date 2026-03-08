@@ -206,6 +206,8 @@ export function CanvasPanel({
 
   // 标记下一次 onPathChange 是否来自 homeDirectory 自动同步（不应触发 workdir 更新）
   const skipNextWorkDirUpdateRef = useRef(false);
+  // 当前是否处于 NAS 模式（NAS 路径是相对路径，不能同步为本地 workdir）
+  const [isNasMode, setIsNasMode] = useState(false);
 
   // 当 homeDirectory 从 API 获取后更新时，同步到 fileManagerPath
   useEffect(() => {
@@ -223,6 +225,8 @@ export function CanvasPanel({
       skipNextWorkDirUpdateRef.current = false;
       return;
     }
+    // NAS 模式下路径是相对路径，不能同步为本地 workdir
+    if (isNasMode) return;
     if (onWorkDirChange) {
       onWorkDirChange(newPath);
     }
@@ -546,6 +550,7 @@ export function CanvasPanel({
             serverUrl={serverUrl}
             onAddReference={onAddReference}
             onPermissionError={onPermissionError}
+            onStorageModeChange={setIsNasMode}
           />
         ) : mode === 'browser' ? (
           /* 浏览器标签页 */

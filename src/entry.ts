@@ -17,6 +17,8 @@ import { MemoryManager } from './memory/manager.js';
 import { StorageManager, setStorageManager } from './storage/manager.js';
 import { LocalStorage } from './storage/local-storage.js';
 import { NasStorage } from './storage/nas-storage.js';
+import { SmbStorage } from './storage/smb-storage.js';
+import type { StorageConfig } from './storage/storage.interface.js';
 import { nasTools } from './agents/tools/nas-tools.js';
 import { ToolRegistry } from './agents/tools/registry.js';
 import { UnifiedAgentRunner, type IAgentRunner } from './agents/unified-runner.js';
@@ -117,16 +119,20 @@ export async function main(): Promise<void> {
       try {
         let storage;
         if (providerConfig.type === 'local') {
-          storage = new LocalStorage(providerConfig);
+          storage = new LocalStorage(providerConfig as StorageConfig);
         } else if (providerConfig.type === 'nas') {
-          storage = new NasStorage(providerConfig);
+          if ((providerConfig as StorageConfig).protocol === 'smb') {
+            storage = new SmbStorage(providerConfig as StorageConfig);
+          } else {
+            storage = new NasStorage(providerConfig as StorageConfig);
+          }
         } else {
           console.warn(`[MantisBot] Unknown storage type: ${providerConfig.type}`);
           continue;
         }
 
         storageManager.registerStorage(providerConfig.id, storage);
-        console.log(`[MantisBot] Registered ${providerConfig.type} storage: ${providerConfig.name}`);
+        console.log(`[MantisBot] Registered ${providerConfig.type}/${(providerConfig as StorageConfig).protocol || 'local'} storage: ${providerConfig.name}`);
       } catch (error) {
         console.error(`[MantisBot] Failed to initialize storage ${providerConfig.id}:`, error);
       }

@@ -1,8 +1,5 @@
 // src/storage/smb-storage.ts
-
-// node-smb2 是可选依赖，可能未安装
-// @ts-ignore - 可选依赖，类型声明可能不存在
-import SMB2Client from 'node-smb2';
+// node-smb2 是可选依赖，在 connect() 时动态加载，避免包未安装时启动崩溃
 
 import type {
   IStorage,
@@ -18,7 +15,7 @@ import {
 import { createReadStream } from 'fs';
 import path from 'path';
 
-// 类型定义（简化版本，因为 @types/node-smb2 可能不存在）
+// 类型定义（node-smb2 无官方类型声明）
 type SMBClient = any;
 type SMBSession = any;
 type SMBTree = any;
@@ -31,6 +28,8 @@ export class SmbStorage implements IStorage {
   private session: SMBSession | null = null;
   private tree: SMBTree | null = null;
   private connected: boolean = false;
+  private host: string;
+  private shareName: string;
 
   constructor(config: StorageConfig) {
     this.config = config;
@@ -46,7 +45,6 @@ export class SmbStorage implements IStorage {
 
     // 从 URL 中提取 host 和 share
     // URL 格式: smb://host/share 或 //host/share
-    // 需要添加协议前缀以便 URL 构造函数解析
     let urlString = config.url;
     if (!urlString.includes('://')) {
       urlString = 'smb:' + urlString;
@@ -62,36 +60,46 @@ export class SmbStorage implements IStorage {
       );
     }
 
-    try {
-      // node-smb2 使用 Client(host) 构造函数，host 不需要协���前缀
-      const host = url.hostname;
-      this.client = new SMB2Client(host);
+    this.host = url.hostname;
+    this.shareName = sharePath.join('/');
+    this.config.share = this.shareName;
 
-      // 保存 share 和 domain 信息，供 connect() 方法使用
-      this.config.share = sharePath.join('/');
-      this.config.domain = url.username?.split('\\')[0] || '';
-
-      console.log(`[SmbStorage] Initialized for: ${config.url}`);
-    } catch (error) {
-      throw new StorageError(
-        `Failed to create SMB client: ${error instanceof Error ? error.message : 'Unknown error'}`,
-        'CLIENT_CREATION_FAILED',
-        config.id,
-        error instanceof Error ? error : undefined
-      );
+    // domain 优先使用显式配置，其次从 URL 用户名部分解析（DOMAIN\user 格式）
+    if (!this.config.domain) {
+      this.config.domain = url.username?.split('%5C')[0] || url.username?.split('\\')[0] || '';
     }
+
+    console.log(`[SmbStorage] Configured for: ${config.url}`);
   }
 
   async connect(): Promise<void> {
-    if (!this.client) {
-      throw new StorageError('SMB client not initialized', 'CLIENT_NOT_INITIALIZED', this.config.id);
+    // 动态加载 node-smb2（可选依赖，缺失时给出明确错误提示）
+    let SMB2Client: any;
+    try {
+      const mod = await import('node-smb2');
+      SMB2Client = mod.Client ?? mod.default?.Client ?? mod.default ?? mod;
+    } catch {
+      throw new StorageError(
+        'node-smb2 is not installed. Run: npm install node-smb2',
+        'MISSING_DEPENDENCY',
+        this.config.id
+      );
     }
 
     try {
-      // 连接到 SMB 服务器
-      await this.client.connect();
+      this.client = new SMB2Client(this.host);
+    } catch (depError) {
+      // 重新抛出依赖缺失错误（StorageError），其他错误继续往下处理
+      if (depError instanceof StorageError) throw depError;
+      throw new StorageError(
+        `Failed to create SMB client: ${depError instanceof Error ? depError.message : 'Unknown error'}`,
+        'CLIENT_CREATION_FAILED',
+        this.config.id
+      );
+    }
 
-      // 认证 - 使用 NTLMv2（现代 Windows 服务器默认使用）
+    try {
+      // authenticate() 内部会自动完成 TCP 连接，不需要先调用 connect()
       this.session = await this.client.authenticate({
         domain: this.config.domain || '',
         username: this.config.username!,
@@ -193,11 +201,13 @@ export class SmbStorage implements IStorage {
 
   private getFullPath(relativePath: string): string {
     const basePath = this.config.basePath || '';
-    const cleanBase = basePath.replace(/\/+$/, '');
-    const cleanPath = relativePath.replace(/^\/+/, '');
+    // 去掉前导斜杠（防止将 Unix 绝对路径 /uploads 误拼入 SMB 路径）和末尾斜杠
+    const cleanBase = basePath.replace(/^\/+/, '').replace(/\/+$/, '').replace(/\\/g, '\\').replace(/\\+$/, '');
+    const cleanPath = relativePath.replace(/^[/\\]+/, '');
     // SMB 使用 Windows 风格路径分隔符
     if (cleanBase) {
-      return `${cleanBase}\\${cleanPath}`.replace(/\\+/g, '\\');
+      const joined = `${cleanBase}\\${cleanPath}`;
+      return joined.replace(/\\+/g, '\\').replace(/\\$/, '');
     }
     return cleanPath;
   }
@@ -205,8 +215,10 @@ export class SmbStorage implements IStorage {
   private stripBasePath(fullPath: string): string {
     const basePath = this.config.basePath || '';
     if (!basePath) return fullPath;
-    const cleanBase = basePath.replace(/\\+$/, '');
-    return fullPath.replace(new RegExp(`^${this.escapeRegExp(cleanBase)}\\\\?`), '') || '';
+    // 去掉前导斜杠，与 getFullPath 保持一致
+    const cleanBase = basePath.replace(/^\/+/, '').replace(/[/\\]+$/, '');
+    if (!cleanBase) return fullPath;
+    return fullPath.replace(new RegExp(`^${this.escapeRegExp(cleanBase)}[/\\\\]?`), '') || '';
   }
 
   private escapeRegExp(string: string): string {
@@ -243,28 +255,36 @@ export class SmbStorage implements IStorage {
       console.log(`[SmbStorage] Listing: relativePath='${relativePath}', fullPath='${fullPath}'`);
 
       const entries = await this.tree.readDirectory(fullPath);
-      console.log(`[SmbStorage] Entries: ${entries.length}`);
 
-      if (entries.length === 0) {
-        return [];
-      }
+      // 过滤 . 和 .. 条目
+      const filtered = entries.filter((e: any) => e.filename !== '.' && e.filename !== '..');
+      console.log(`[SmbStorage] Entries: ${filtered.length} (raw: ${entries.length})`);
 
-      return entries.map((entry: any) => ({
-        name: entry.filename,
-        path: this.stripBasePath(`${fullPath}\\${entry.filename}`),
-        type: entry.type === 'Directory' ? 'directory' : 'file',
-        size: Number(entry.fileSize) || 0,
-        modified: new Date(entry.lastWriteTime) || new Date(),
-        mimeType: undefined
-      }));
+      return filtered.map((entry: any) => {
+        // node-smb2 的 filename 可能带 './' 前缀，统一去掉
+        const name = entry.filename.replace(/^\.\//, '');
+        return {
+          name,
+          path: this.stripBasePath(fullPath ? `${fullPath}\\${name}` : name),
+          type: entry.type === 'Directory' ? 'directory' : 'file',
+          size: Number(entry.fileSize) || 0,
+          modified: new Date(entry.lastWriteTime) || new Date(),
+          mimeType: undefined
+        };
+      });
     } catch (error) {
-      // 如果列出根目录失败，返回空数组而不是抛出错误
+      // 将错误对象序列化为可读字符串（node-smb2 返回自定义对象而非 Error 实例）
+      const errMsg = error instanceof Error
+        ? error.message
+        : (() => { try { return JSON.stringify(error, (_, v) => typeof v === 'bigint' ? v.toString() : v); } catch { return String(error); } })();
+
+      // 根目录失败时返回空数组而不是抛出（避免整个面板崩溃），但记录详细错误
       if (!relativePath || relativePath === '' || relativePath === '/') {
-        console.warn(`[SmbStorage] Root list failed, returning empty: ${error}`);
+        console.error(`[SmbStorage] Root list failed: ${errMsg}`);
         return [];
       }
       throw new StorageError(
-        `Failed to list directory '${relativePath}': ${error instanceof Error ? error.message : 'Unknown error'}`,
+        `Failed to list directory '${relativePath}': ${errMsg}`,
         'LIST_FAILED',
         this.config.id,
         error instanceof Error ? error : undefined

@@ -76,8 +76,10 @@ const SENSITIVE_PATHS = new Set([
 // 允许访问的敏感目录的子路径（白名单）
 // 这些路径虽然是敏感目录的子目录，但需要允许用户访问
 const ALLOWED_SENSITIVE_SUBPATHS = new Set([
-  '/app/data/uploads', // 用户上传的附件
-  // 注意：/root 是用户挂载的宿主机主目录，不在敏感路径中，无需白名单
+  '/app/data/uploads',       // 用户上传的附件
+  '/private/tmp/mantis-nas', // NAS 自动挂载点（macOS /tmp 的真实路径）
+  '/tmp/mantis-nas',         // NAS 自动挂载点
+  '/Volumes',                // macOS 网络挂载卷（NAS 通过 Finder/系统挂载到此）
 ]);
 
 /**

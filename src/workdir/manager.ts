@@ -99,8 +99,17 @@ class WorkDirManager {
   private getSystemDefaultAllowedPaths(): string[] {
     const defaultPaths: string[] = [];
 
-    // /tmp 目录
+    // /tmp 目录（macOS 上 /tmp → /private/tmp，两者都加）
     defaultPaths.push('/tmp');
+    try { defaultPaths.push(fs.realpathSync('/tmp')); } catch { /* ignore */ }
+    // NAS 自动挂载目录
+    defaultPaths.push('/tmp/mantis-nas');
+    try { defaultPaths.push(fs.realpathSync('/tmp') + '/mantis-nas'); } catch { /* ignore */ }
+
+    // macOS 网络挂载卷（Finder/系统挂载到 /Volumes/xxx）
+    if (process.platform === 'darwin') {
+      defaultPaths.push('/Volumes');
+    }
 
     // 用户主目录
     defaultPaths.push(os.homedir());

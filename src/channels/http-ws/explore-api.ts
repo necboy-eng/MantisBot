@@ -8,6 +8,17 @@ import { getStorageManager, hasStorageManager } from '../../storage/manager.js';
 import { StorageError } from '../../storage/storage.interface.js';
 import { isSensitivePath, shouldHideItem } from '../../security/path-guard.js';
 
+// 判断是否应走 StorageManager：NAS 类型存储时，即使是绝对路径也走 StorageManager
+function shouldUseStorageManager(): boolean {
+  if (!hasStorageManager()) return false;
+  try {
+    getStorageManager().getCurrentStorage();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 const router = express.Router();
 
 // 安全检查：防止路径遍历攻击（支持完全访问模式）
@@ -43,13 +54,18 @@ function checkSensitivePathAccess(targetPath: string, baseDir: string): string |
   return null;
 }
 
-// 获取用户主目录
+// 获取用户主目录（NAS 模式下返回 '/'）
 router.get('/api/explore/home', (_req, res) => {
   try {
+    // NAS 模式：当前存储是 NAS 时，初始路径应为 NAS 根目录而非本地 home
+    if (shouldUseStorageManager()) {
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+      return res.json({ home: '/', platform: process.platform });
+    }
     const homeDir = os.homedir();
     res.json({
       home: homeDir,
-      platform: process.platform // 'win32', 'darwin', 'linux'
+      platform: process.platform
     });
   } catch (error) {
     console.error('Explore home error:', error);
@@ -77,30 +93,62 @@ router.get('/api/explore/list', async (req, res) => {
   }
 
   try {
-    // 对于绝对路径（如 /Users），直接使用本地文件系统，不通过 Storage Manager
-    // 因为 Storage Manager 可能限制在特定目录内
-    const useStorageManager = hasStorageManager() && !path.isAbsolute(targetPath);
+    const useStorageManager = shouldUseStorageManager();
 
     if (useStorageManager) {
       const storageManager = getStorageManager();
       const storage = storageManager.getCurrentStorage();
 
-      const items = await storage.listDirectory(targetPath);
-      const currentFullPath = path.join(baseDir, targetPath);
+      // NAS 使用相对路径（去掉前导斜杠），本地存储使用绝对路径
+      let storagePath: string;
+      if (storage.type === 'nas') {
+        // 将前端传来的任意路径规范为 NAS 相对路径
+        // '/' 或 '' → '' (根目录)；'/foo/bar' → 'foo/bar'
+        storagePath = targetPath.replace(/^\/+/, '');
+      } else {
+        storagePath = path.isAbsolute(targetPath) ? targetPath : path.join(baseDir, targetPath);
+      }
+
+      const items = await storage.listDirectory(storagePath);
+      console.log(`[explore/list] storage.type=${storage.type} storagePath="${storagePath}" raw items(${items.length}):`, items.map(i => i.name));
+      // NAS 返回带 / 前缀的路径供前端显示；本地返回绝对路径
+      const currentDisplayPath = storage.type === 'nas'
+        ? '/' + storagePath
+        : (path.isAbsolute(targetPath) ? targetPath : path.join(baseDir, targetPath));
       const result = items
-        .filter(item => !item.name.startsWith('.')) // 过滤隐藏文件
-        .filter(item => !shouldHideItem(currentFullPath, item.name)) // 过滤敏感目录
+        .filter(item => {
+          if (item.name.startsWith('.')) {
+            console.log(`[explore/list] filtered (hidden): "${item.name}"`);
+            return false;
+          }
+          return true;
+        })
+        // NAS 存储时不做本地敏感路径过滤（NAS 路径与本地系统路径无关）
+        .filter(item => {
+          if (storage.type !== 'nas' && shouldHideItem(currentDisplayPath, item.name)) {
+            console.log(`[explore/list] filtered (sensitive): "${item.name}" at "${currentDisplayPath}"`);
+            return false;
+          }
+          return true;
+        })
         .map(item => ({
           name: item.name,
           type: item.type,
-          path: path.join(baseDir, item.path),
+          // NAS：路径使用 /相对路径 格式；本地：绝对路径
+          path: storage.type === 'nas' ? '/' + item.path.replace(/^\/+/, '') : path.join(baseDir, item.path),
           size: item.size,
           modified: item.modified.toISOString(),
           ext: item.type === 'file' ? path.extname(item.name).toLowerCase() : undefined,
           mimeType: item.mimeType
         }));
 
-      return res.json({ items: result, currentPath: path.join(baseDir, targetPath) });
+      console.log(`[explore/list] returning ${result.length} items:`, result.map(i => i.name));
+      // NAS 内容是远程动态数据，禁用缓存
+      if (storage.type === 'nas') {
+        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+        res.setHeader('Pragma', 'no-cache');
+      }
+      return res.json({ items: result, currentPath: currentDisplayPath });
     }
 
     // 回退到原有的本地文件系统操作
@@ -172,14 +220,17 @@ router.get('/api/explore/read', async (req, res) => {
   }
 
   try {
-    // 对于绝对路径，直接使用本地文件系统
-    const useStorageManager = hasStorageManager() && !path.isAbsolute(targetPath);
+    const useStorageManager = shouldUseStorageManager();
 
     if (useStorageManager) {
       const storageManager = getStorageManager();
       const storage = storageManager.getCurrentStorage();
 
-      const stats = await storage.getStats(targetPath);
+      const storagePath = (storage.type === 'nas' && path.isAbsolute(targetPath))
+        ? path.relative(baseDir, targetPath)
+        : targetPath;
+
+      const stats = await storage.getStats(storagePath);
 
       // 如果是目录，返回错误
       if (stats.isDirectory) {
@@ -191,15 +242,15 @@ router.get('/api/explore/read', async (req, res) => {
         return res.status(413).json({ error: 'File too large' });
       }
 
-      const contentBuffer = await storage.readFile(targetPath);
+      const contentBuffer = await storage.readFile(storagePath);
       const content = contentBuffer.toString('utf-8');
-      const ext = path.extname(targetPath).toLowerCase();
+      const ext = path.extname(storagePath).toLowerCase();
 
       return res.json({
         content,
         size: stats.size,
         ext,
-        path: path.join(baseDir, targetPath)
+        path: path.isAbsolute(targetPath) ? targetPath : path.join(baseDir, targetPath)
       });
     }
 
@@ -311,13 +362,17 @@ router.get('/api/explore/binary', async (req, res) => {
     }
 
     // 对于绝对路径，直接使用本地文件系统
-    const useStorageManager = hasStorageManager() && !path.isAbsolute(targetPath);
+    const useStorageManager = shouldUseStorageManager();
 
     if (useStorageManager) {
       const storageManager = getStorageManager();
       const storage = storageManager.getCurrentStorage();
 
-      const stats = await storage.getStats(targetPath);
+      const storagePath = (storage.type === 'nas' && path.isAbsolute(targetPath))
+        ? path.relative(baseDir, targetPath)
+        : targetPath;
+
+      const stats = await storage.getStats(storagePath);
 
       // 如果是目录，返回错误
       if (stats.isDirectory) {
@@ -329,8 +384,8 @@ router.get('/api/explore/binary', async (req, res) => {
         return res.status(413).json({ error: 'File too large' });
       }
 
-      const content = await storage.readFile(targetPath);
-      const ext = path.extname(targetPath).toLowerCase();
+      const content = await storage.readFile(storagePath);
+      const ext = path.extname(storagePath).toLowerCase();
 
       // MIME 类型映射
       const mimeTypes: Record<string, string> = {
@@ -431,23 +486,27 @@ router.get('/api/explore/stat', async (req, res) => {
 
   try {
     // 对于绝对路径，直接使用本地文件系统
-    const useStorageManager = hasStorageManager() && !path.isAbsolute(targetPath);
+    const useStorageManager = shouldUseStorageManager();
 
     if (useStorageManager) {
       const storageManager = getStorageManager();
       const storage = storageManager.getCurrentStorage();
 
-      const exists = await storage.exists(targetPath);
+      const storagePath = (storage.type === 'nas' && path.isAbsolute(targetPath))
+        ? path.relative(baseDir, targetPath)
+        : targetPath;
+
+      const exists = await storage.exists(storagePath);
       if (!exists) {
         return res.status(404).json({ error: 'File not found' });
       }
 
-      const stats = await storage.getStats(targetPath);
-      const ext = path.extname(targetPath).toLowerCase();
+      const stats = await storage.getStats(storagePath);
+      const ext = path.extname(storagePath).toLowerCase();
 
       return res.json({
-        path: path.join(baseDir, targetPath),
-        name: path.basename(targetPath),
+        path: path.isAbsolute(targetPath) ? targetPath : path.join(baseDir, targetPath),
+        name: path.basename(storagePath),
         size: stats.size,
         isDirectory: stats.isDirectory,
         modified: stats.modified,
@@ -505,7 +564,7 @@ router.post('/api/explore/upload', async (req, res) => {
 
   try {
     // 如果有存储管理器，使用存储管理器
-    if (hasStorageManager()) {
+    if (shouldUseStorageManager()) {
       const storageManager = getStorageManager();
       const storage = storageManager.getCurrentStorage();
 
@@ -593,7 +652,7 @@ router.post('/api/explore/mkdir', async (req, res) => {
 
   try {
     // 如果有存储管理器，使用存储管理器
-    if (hasStorageManager()) {
+    if (shouldUseStorageManager()) {
       const storageManager = getStorageManager();
       const storage = storageManager.getCurrentStorage();
 
@@ -672,7 +731,7 @@ router.post('/api/explore/delete', async (req, res) => {
 
   try {
     // 如果有存储管理器，使用存储管理器
-    if (hasStorageManager()) {
+    if (shouldUseStorageManager()) {
       const storageManager = getStorageManager();
       const storage = storageManager.getCurrentStorage();
 
@@ -726,7 +785,7 @@ router.post('/api/explore/delete', async (req, res) => {
 });
 
 // 复制到剪贴板（仅验证和返回信息）
-router.post('/api/explore/copy', (req, res) => {
+router.post('/api/explore/copy', async (req, res) => {
   const { source } = req.body;
   const baseDir = workDirManager.getCurrentWorkDir();
 
@@ -745,6 +804,28 @@ router.post('/api/explore/copy', (req, res) => {
   }
 
   try {
+    // NAS 存储时也走 StorageManager 验证文件存在
+    if (shouldUseStorageManager()) {
+      const storageManager = getStorageManager();
+      const storage = storageManager.getCurrentStorage();
+
+      const storagePath = (storage.type === 'nas' && path.isAbsolute(source))
+        ? path.relative(baseDir, source)
+        : source;
+
+      const exists = await storage.exists(storagePath);
+      if (!exists) {
+        return res.status(404).json({ error: 'File or directory not found' });
+      }
+
+      const stats = await storage.getStats(storagePath);
+      return res.json({
+        success: true,
+        source,
+        type: stats.isDirectory ? 'directory' : 'file'
+      });
+    }
+
     const fullPath = resolveUserPath(baseDir, source);
 
     if (!fs.existsSync(fullPath)) {
@@ -791,7 +872,7 @@ router.post('/api/explore/paste', async (req, res) => {
 
   try {
     // 如果有存储管理器，使用存储管理器
-    if (hasStorageManager()) {
+    if (shouldUseStorageManager()) {
       const storageManager = getStorageManager();
       const storage = storageManager.getCurrentStorage();
 
@@ -930,7 +1011,7 @@ router.post('/api/explore/rename', async (req, res) => {
 
   try {
     // 如果有存储管理器，使用存储管理器
-    if (hasStorageManager()) {
+    if (shouldUseStorageManager()) {
       const storageManager = getStorageManager();
       const storage = storageManager.getCurrentStorage();
 
@@ -1056,16 +1137,16 @@ router.post('/api/explore/download-zip', async (req, res) => {
     const fileInfos: { path: string; name: string; size: number }[] = [];
 
     for (const targetPath of paths) {
-      // 对于绝对路径，直接使用本地文件系统
-      const useStorageManager = hasStorageManager() && !path.isAbsolute(targetPath);
+      // NAS 存储时也走 StorageManager
+      const useStorageManager = shouldUseStorageManager();
 
       if (useStorageManager) {
         const storageManager = getStorageManager();
         const storage = storageManager.getCurrentStorage();
 
-        const relativePath = path.isAbsolute(targetPath)
+        const relativePath = (storage.type === 'nas' && path.isAbsolute(targetPath))
           ? path.relative(baseDir, targetPath)
-          : targetPath;
+          : (path.isAbsolute(targetPath) ? path.relative(baseDir, targetPath) : targetPath);
 
         const exists = await storage.exists(relativePath);
         if (!exists) {
