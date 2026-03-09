@@ -101,6 +101,11 @@ export class CronExecutor {
 
   private resolveChannel(channel?: string | "last"): string {
     if (!channel || channel === "last") return "web";
+    const VALID_PLATFORMS = new Set(['web', 'feishu', 'wecom', 'dingtalk', 'slack', 'whatsapp', 'wechat']);
+    if (!VALID_PLATFORMS.has(channel)) {
+      console.warn(`[CronExecutor] Unknown channel "${channel}", falling back to "web"`);
+      return "web";
+    }
     return channel;
   }
 

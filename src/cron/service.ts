@@ -171,7 +171,7 @@ export class CronService {
     await this.saveJobs();
   }
 
-  async run(id: string, _mode?: "due" | "force") {
+  async run(id: string, mode?: "due" | "force") {
     const job = this.jobs.get(id);
     if (!job) {
       throw new Error(`Job not found: ${id}`);
@@ -182,13 +182,14 @@ export class CronService {
       job.state.runningAtMs = Date.now();
       await this.deps.executor.executePayload(job);
 
-      job.state.lastRunAtMs = Date.now();
+      const finishedAt = Date.now();
+      job.state.lastRunAtMs = finishedAt;
       job.state.lastStatus = 'ok';
       job.state.runningAtMs = undefined;
-      job.state.lastDurationMs = Date.now() - (job.state.runningAtMs || Date.now());
+      job.state.lastDurationMs = finishedAt - (job.state.runningAtMs || finishedAt);
 
-      // 如果是一次性任务，删除它
-      if (job.schedule.kind === 'at') {
+      // 一次性任务（kind=at）：只有到期自动触发时才删除，手动 force 执行不删除
+      if (job.schedule.kind === 'at' && mode !== 'force') {
         this.jobs.delete(id);
       } else {
         // 重新计算下次运行时间

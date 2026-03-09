@@ -4,7 +4,7 @@ import type { CronService } from '../../cron/service.js';
 export function createCronManageTool(cronService: CronService): Tool {
   return {
     name: 'cron_manage',
-    description: '管理定时任务（创建、更新、删除、查询、运行）',
+    description: '管理定时任务（add/update/remove/list/run）',
     parameters: {
       type: 'object',
       properties: {
@@ -13,56 +13,47 @@ export function createCronManageTool(cronService: CronService): Tool {
           enum: ['list', 'add', 'update', 'remove', 'run'],
           description: '操作类型: list=列出任务, add=创建任务, update=更新任务, remove=删除任务, run=立即运行'
         },
-        job: {
-          type: 'object',
-          description: '任务配置（用于 add 操作）',
-          properties: {
-            name: { type: 'string', description: '任务名称' },
-            description: { type: 'string', description: '任务描述' },
-            enabled: { type: 'boolean', description: '是否启用', default: true },
-            schedule: {
-              type: 'object',
-              description: '调度配置',
-              properties: {
-                kind: { type: 'string', enum: ['at', 'every', 'cron'] },
-                at: { type: 'string', description: '执行时间（ISO 8601，用于 kind=at）' },
-                everyMs: { type: 'number', description: '间隔毫秒（用于 kind=every）' },
-                expr: { type: 'string', description: 'Cron 表达式（用于 kind=cron）' },
-                tz: { type: 'string', description: '时区（用于 kind=cron）' }
-              }
-            },
-            payload: {
-              type: 'object',
-              description: '任务内容',
-              properties: {
-                kind: { type: 'string', enum: ['systemEvent', 'agentTurn'] },
-                text: { type: 'string', description: '通知文本（用于 kind=systemEvent）' },
-                message: { type: 'string', description: 'Agent 消息（用于 kind=agentTurn）' },
-                model: { type: 'string', description: '模型名称（可选）' }
-              }
-            },
-            delivery: {
-              type: 'object',
-              description: '投递配置',
-              properties: {
-                mode: { type: 'string', enum: ['none', 'announce'] },
-                channel: { type: 'string', description: '渠道 ID 或 "last"' },
-                to: { type: 'string', description: '接收者' }
-              }
-            }
-          }
-        },
-        jobId: {
+
+        // ── add 操作：扁平化参数，避免深层嵌套 ──
+        name: { type: 'string', description: '[add] 任务名称' },
+        description: { type: 'string', description: '[add] 任务描述（可选）' },
+        enabled: { type: 'boolean', description: '[add] 是否启用，默认 true' },
+
+        // 调度方式三选一
+        cronExpr: { type: 'string', description: '[add] Cron 表达式，例如 "0 9 * * *"=每天9点，"30 9 * * *"=每天9:30' },
+        cronTz: { type: 'string', description: '[add] Cron 时区，默认 Asia/Shanghai' },
+        runAt: { type: 'string', description: '[add] 指定时间执行一次（ISO 8601），例如 "2026-03-10T09:00:00+08:00"' },
+        everyMs: { type: 'number', description: '[add] 按固定间隔重复执行（毫秒），例如 3600000=每小时' },
+
+        // 任务内容二选一
+        message: { type: 'string', description: '[add] agentTurn 类型：Agent 执行的指令文本' },
+        text: { type: 'string', description: '[add] systemEvent 类型：直接发送的通知文本（不经过 Agent）' },
+        model: { type: 'string', description: '[add] 使用的模型（可选，不填则用默认模型）' },
+
+        // 投递渠道
+        channel: {
           type: 'string',
-          description: '任务 ID（用于 update/remove/run 操作）'
+          enum: ['last', 'web', 'feishu', 'wecom', 'dingtalk', 'slack', 'whatsapp', 'wechat'],
+          description: '[add] 投递渠道，只能填枚举值之一：last（上次渠道，默认）/ web / feishu / wecom / dingtalk / slack / whatsapp / wechat'
         },
+
+        // ── update/remove/run 操作 ──
+        jobId: { type: 'string', description: '[update/remove/run] 任务 ID' },
         patch: {
           type: 'object',
-          description: '更新内容（用于 update 操作）',
+          description: '[update] 更新内容',
           properties: {
             name: { type: 'string' },
             description: { type: 'string' },
-            enabled: { type: 'boolean' }
+            enabled: { type: 'boolean' },
+            delivery: {
+              type: 'object',
+              properties: {
+                mode: { type: 'string', enum: ['none', 'announce'] },
+                channel: { type: 'string', description: 'last/web/feishu/wecom/dingtalk/slack' },
+                to: { type: 'string' }
+              }
+            }
           }
         }
       },
@@ -91,53 +82,49 @@ export function createCronManageTool(cronService: CronService): Tool {
           }
 
           case 'add': {
-            const jobInput = params.job as any;
+            const p = params as any;
 
+            if (!p.name) {
+              return { success: false, error: '缺少 name 参数' };
+            }
+            if (!p.message && !p.text) {
+              return { success: false, error: '缺少任务内容：请提供 message（agentTurn）或 text（systemEvent）' };
+            }
+            if (!p.cronExpr && !p.runAt && !p.everyMs) {
+              return { success: false, error: '缺少调度配置：请提供 cronExpr、runAt 或 everyMs 其中一个' };
+            }
+
+            // 组装 schedule
             let schedule: any;
-            if (jobInput.schedule.kind === 'at') {
-              schedule = { kind: 'at', at: jobInput.schedule.at };
-            } else if (jobInput.schedule.kind === 'every') {
-              schedule = { kind: 'every', everyMs: jobInput.schedule.everyMs };
+            if (p.runAt) {
+              schedule = { kind: 'at', at: p.runAt };
+            } else if (p.everyMs) {
+              schedule = { kind: 'every', everyMs: p.everyMs };
             } else {
-              schedule = {
-                kind: 'cron',
-                expr: jobInput.schedule.expr,
-                tz: jobInput.schedule.tz
-              };
+              schedule = { kind: 'cron', expr: p.cronExpr, tz: p.cronTz || 'Asia/Shanghai' };
             }
 
-            let payload: any;
-            if (jobInput.payload.kind === 'systemEvent') {
-              payload = { kind: 'systemEvent', text: jobInput.payload.text };
-            } else {
-              payload = {
-                kind: 'agentTurn',
-                message: jobInput.payload.message,
-                model: jobInput.payload.model
-              };
-            }
+            // 组装 payload
+            const payload: any = p.text
+              ? { kind: 'systemEvent', text: p.text }
+              : { kind: 'agentTurn', message: p.message, model: p.model || undefined };
 
             const job: any = {
-              name: jobInput.name,
-              description: jobInput.description,
-              enabled: jobInput.enabled ?? true,
+              name: p.name,
+              description: p.description,
+              enabled: p.enabled ?? true,
               schedule,
               sessionTarget: 'isolated',
               wakeMode: 'now',
               payload,
-              delivery: jobInput.delivery ? {
-                mode: jobInput.delivery.mode || 'announce',
-                channel: jobInput.delivery.channel,
-                to: jobInput.delivery.to
-              } : undefined
+              delivery: {
+                mode: 'announce',
+                channel: p.channel || 'last'
+              }
             };
 
             const id = await cronService.add(job);
-            return {
-              success: true,
-              id,
-              message: `定时任务已创建，ID: ${id}`
-            };
+            return { success: true, id, message: `定时任务已创建，ID: ${id}` };
           }
 
           case 'update': {
