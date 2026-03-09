@@ -176,6 +176,7 @@ export class FileStorage {
   listFiles(): string[] {
     return fs.readdirSync(this.uploadDir);
   }
+
 }
 
 // 单例实例

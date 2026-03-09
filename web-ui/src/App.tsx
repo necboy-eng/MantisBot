@@ -375,6 +375,9 @@ function App() {
   // 待发送附件（用户在输入框上传、发送后清空）
   const [pendingAttachments, setPendingAttachments] = useState<FileAttachment[]>([]);
 
+  // 正在上传的文件数量（用于显示进度动画）
+  const [uploadingCount, setUploadingCount] = useState(0);
+
   // 设置面板状态
   const [settingsOpen, setSettingsOpen] = useState(false);
 
@@ -822,21 +825,49 @@ function App() {
     });
   }
 
-  // 上传单个文件到 /api/files，追加到待发附件队列
+  // 上传单个文件到 /api/files/upload，追加到待发附件队列
   const uploadFile = useCallback(async (file: File) => {
-    const base64 = await new Promise<string>((resolve) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve((reader.result as string).split(',')[1]);
-      reader.readAsDataURL(file);
-    });
-    const res = await authFetch('/api/files', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ filename: file.name, content: base64, mimeType: file.type }),
-    });
-    if (res.ok) {
-      const attachment: FileAttachment = await res.json();
-      setPendingAttachments(prev => [...prev, attachment]);
+    console.log('[App] Uploading file:', file.name, 'size:', file.size, 'type:', file.type);
+
+    // 文件大小检查（100MB）
+    const MAX_SIZE = 100 * 1024 * 1024;
+    if (file.size > MAX_SIZE) {
+      console.error('[App] File too large:', file.size);
+      setToasts(prev => [...prev, {
+        id: Date.now().toString(),
+        content: `文件过大（最大 100MB）`,
+        category: 'error'
+      }]);
+      return;
+    }
+
+    setUploadingCount(prev => prev + 1);
+
+    try {
+      // FormData 上传：无 base64 开销，原生流式传输
+      const formData = new FormData();
+      formData.append('file', file);
+
+      const res = await authFetch('/api/files/upload', {
+        method: 'POST',
+        // 不设置 Content-Type，浏览器自动添加 multipart boundary
+        body: formData,
+      });
+
+      if (res.ok) {
+        const attachment: FileAttachment & { filePath?: string } = await res.json();
+        console.log('[App] File uploaded successfully:', attachment.name, attachment.filePath);
+        setPendingAttachments(prev => [...prev, attachment]);
+      } else {
+        console.error('[App] File upload failed:', res.status, res.statusText);
+        setToasts(prev => [...prev, {
+          id: Date.now().toString(),
+          content: `文件上传失败：${file.name}`,
+          category: 'error'
+        }]);
+      }
+    } finally {
+      setUploadingCount(prev => prev - 1);
     }
   }, []);
 
@@ -1665,6 +1696,23 @@ function App() {
       if (parts.length > 0) {
         fullMessage = `[上下文引用]\n${parts.join('\n\n')}\n\n---\n${userMessage}`;
       }
+    }
+
+    // 注入附件文件路径（类 NAS 引用模式，由 Agent 自行决定如何读取）
+    if (attachmentsToSend.length > 0) {
+      const fileLines: string[] = [];
+
+      for (const att of attachmentsToSend) {
+        const lines = [
+          `📄 ${att.name}`,
+          `路径: ${(att as any).filePath || att.url}`,
+          `大小: ${formatFileSize(att.size)}`,
+          `类型: ${att.mimeType}`,
+        ];
+        fileLines.push(lines.join('\n'));
+      }
+
+      fullMessage = `[附件文件]\n\n${fileLines.join('\n\n')}\n\n---\n${fullMessage}`;
     }
 
     // 使用 generateUUID() 生成唯一 ID
@@ -2841,7 +2889,7 @@ function App() {
                   <input
                     ref={attachmentInputRef}
                     type="file"
-                    accept="image/*"
+                    accept="image/*,.pdf,.docx,.xlsx,.xls,.pptx"
                     multiple
                     className="hidden"
                     onChange={async (e) => {
@@ -2856,10 +2904,24 @@ function App() {
                     type="button"
                     disabled={loading}
                     onClick={() => attachmentInputRef.current?.click()}
-                    className="p-1.5 rounded-lg text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                    className="relative p-1.5 rounded-lg text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                     title="上传图片"
                   >
-                    <Paperclip className="w-4 h-4" />
+                    {uploadingCount > 0 ? (
+                      <>
+                        <Paperclip className="w-4 h-4 opacity-30" />
+                        <svg
+                          className="absolute inset-0 m-auto w-5 h-5 animate-spin text-blue-500"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                        >
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                        </svg>
+                      </>
+                    ) : (
+                      <Paperclip className="w-4 h-4" />
+                    )}
                   </button>
 
                   {/* 斜杠命令提示按钮 */}

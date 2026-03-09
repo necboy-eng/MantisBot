@@ -2300,18 +2300,30 @@ export async function createHTTPServer(options: HTTPServerOptions) {
   });
 
   // File routes
-  // 文件上传 (base64)
-  app.post('/api/files', (req, res) => {
-    try {
-      const fileStorage = getFileStorage();
-      const { filename, content, mimeType } = req.body;
+  // 文件上传 (multipart/form-data) - 比 base64 JSON 快 ~30%，无编码开销
+  const fileUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 100 * 1024 * 1024 }, // 100MB
+  });
 
-      if (!filename || !content) {
-        return res.status(400).json({ error: 'filename and content are required' });
+  app.post('/api/files/upload', fileUpload.single('file'), (req, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ error: 'No file provided' });
       }
 
-      const attachment = fileStorage.saveFile(filename, content, mimeType || 'application/octet-stream');
-      res.status(201).json(attachment);
+      const fileStorage = getFileStorage();
+      const { originalname, buffer, mimetype } = req.file;
+
+      // multer 默认用 latin1 解码文件名，中文会乱码，需重新按 utf-8 解码
+      const filename = Buffer.from(originalname, 'latin1').toString('utf8');
+
+      const attachment = fileStorage.saveFile(filename, buffer, mimetype);
+      const filePath = fileStorage.getFilePath(`${attachment.id}${path.extname(filename)}`);
+
+      console.log(`[HTTPServer] File uploaded: ${filename} (${Math.round(buffer.length / 1024)}KB)`);
+
+      res.status(201).json({ ...attachment, filePath });
     } catch (error) {
       console.error('[HTTPServer] File upload error:', error);
       res.status(500).json({ error: 'Failed to save file' });
