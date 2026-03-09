@@ -852,10 +852,11 @@ export class ClaudeAgentRunner extends EventEmitter {
         // 根据环境变量选择：有 FIRECRAWL_API_KEY 用 Firecrawl，否则用 WebFetch
         ...(useFirecrawl ? [] : ['WebSearch', 'WebFetch']),
         'AskUserQuestion',
-        // MCP 工具
-        ...mcpOnlyToolList.map((t: ToolInfo) => t.name),
-        // Subagent 工具（Agent Team 激活时动态添加，名称 = agentId）
-        ...agentToolNames,
+        // MCP 工具：Claude SDK 将 MCP 工具重命名为 mcp__<server>__<name> 格式
+        // 所以在 tools 列表中必须使用带前缀的完整名称，否则 SDK 认为工具不在允许列表中
+        ...mcpOnlyToolList.map((t: ToolInfo) => `mcp__mantis-tools__${t.name}`),
+        // Subagent 工具（Agent Team 激活时动态添加，同样通过 mantis-tools MCP 服务器注册）
+        ...agentToolNames.map((name: string) => `mcp__mantis-tools__${name}`),
       ],
       // 权限模式：使用 default 以确保 canUseTool 回调被调用
       // SDK 默认可能使用 bypassPermissions，导致 canUseTool 不被调用
