@@ -68,3 +68,4 @@ docker-compose-prebuild.yaml
 docker-compose-release.yaml
 docs/plans/
 TODO.md
+GEMINI.md
