@@ -155,6 +155,22 @@ export class FileStorage {
   }
 
   /**
+   * 获取文件的绝对路径（用于直接传给 Agent 读取）
+   * @param storedName 存储的文件名（带 uuid 的名称）
+   */
+  getFilePath(storedName: string): string | null {
+    const filePath = path.join(this.uploadDir, storedName);
+    const resolved = path.resolve(filePath);
+    if (!resolved.startsWith(this.uploadDir)) {
+      return null;
+    }
+    if (!fs.existsSync(filePath)) {
+      return null;
+    }
+    return resolved;
+  }
+
+  /**
    * 列出所有文件
    */
   listFiles(): string[] {

@@ -24,6 +24,8 @@ import { getFileStorage } from '../../files/index.js';
 import { getLLMClient, clearLLMClientCache } from '../../agents/llm-client.js';
 import { resetEmbeddingsService } from '../../memory/embeddings.js';
 import type { MemoryManager } from '../../memory/manager.js';
+import { registerPendingImages, VISION_INJECT_ENV_KEY } from '../../agents/openai-proxy.js';
+import type { ImageBlock } from '../../agents/openai-proxy.js';
 import exploreRouter from './explore-api.js';
 import storageRouter from './storage-api.js';
 import { createCronRoutes } from './cron-routes.js';
@@ -61,6 +63,10 @@ import { workDirManager } from '../../workdir/manager.js';
 import { PluginLoader } from '../../plugins/loader.js';
 import { createPluginRoutes } from './plugin-routes.js';
 import { UnifiedAgentRunner, type IAgentRunner } from '../../agents/unified-runner.js';
+
+// ─── 模块级常量 ───────────────────────────────────────────────────────────────
+/** 视觉图片注入：单张图片最大允许大小（2MB） */
+const MAX_IMAGE_SIZE = 2 * 1024 * 1024;
 
 // 存储活动的 Agent Runner 实例（用于权限请求响应）
 // Key: sessionId, Value: agentRunner instance
@@ -726,6 +732,77 @@ export async function createHTTPServer(options: HTTPServerOptions) {
 
       // 如果需要临时视觉 runner，替换本次使用的 runner（不影响会话）
       const effectiveRunner = visionRunner ?? agentRunner;
+
+      // ── 图片路径注入：直接读取图片为 base64 并注入到消息中 ─────────────────────
+      if (hasImageAttachment) {
+        const imageAttachments = incomingAttachments.filter(
+          (a: FileAttachment) => a.mimeType?.startsWith('image/')
+        );
+        const fileStorage = getFileStorage();
+
+        const imageBlocks: ImageBlock[] = [];
+        const failedPaths: string[] = [];  // 记录绝对路径，用于 fallback 提示
+
+        for (const att of imageAttachments) {
+          // URL 格式: /api/files/{storedName}
+          const storedName = path.basename(att.url);
+          const absPath = fileStorage.getFilePath(storedName);
+
+          if (!absPath) {
+            console.warn(`[HTTPServer] Image path not resolved: ${storedName}`);
+            failedPaths.push(storedName);
+            continue;
+          }
+
+          try {
+            // 读取文件（单次 syscall），再检查大小
+            const buffer = fs.readFileSync(absPath);
+            if (buffer.length > MAX_IMAGE_SIZE) {
+              console.warn(`[HTTPServer] Image too large (${buffer.length} bytes): ${storedName}`);
+              failedPaths.push(absPath);
+              continue;
+            }
+
+            // 优先使用 FileAttachment 上已有的 mimeType，否则按扩展名回退
+            const mimeType = att.mimeType && att.mimeType.startsWith('image/')
+              ? att.mimeType
+              : (() => {
+                  const ext = absPath.toLowerCase().split('.').pop();
+                  return ext === 'png' ? 'image/png'
+                    : ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg'
+                    : ext === 'gif' ? 'image/gif'
+                    : ext === 'webp' ? 'image/webp'
+                    : 'image/png';
+                })();
+
+            imageBlocks.push({
+              type: 'image',
+              source: { type: 'base64', media_type: mimeType, data: buffer.toString('base64') },
+            });
+
+            console.log(`[HTTPServer] Image loaded: ${storedName} (${buffer.length} bytes, ${mimeType})`);
+          } catch (err) {
+            console.error(`[HTTPServer] Failed to read image ${storedName}:`, err);
+            failedPaths.push(absPath);
+          }
+        }
+
+        // 如果成功读取了图片，注册到 Proxy 注入 Map
+        // 同进程内通过 process.env 传递 injectId（Proxy 与 Runner 共享同一 Node.js 进程）
+        if (imageBlocks.length > 0) {
+          const injectId = registerPendingImages(imageBlocks);
+          process.env[VISION_INJECT_ENV_KEY] = injectId;
+        }
+
+        // 如果有失败的图片，fallback 到 Read 工具提示（给出绝对路径供模型读取）
+        if (failedPaths.length > 0) {
+          const fallbackNote = failedPaths.length === 1
+            ? `\n\n📎 **图片文件路径**：${failedPaths[0]}\n（请使用 Read 工具读取并分析这张图片）`
+            : `\n\n📎 **图片文件路径**：\n${failedPaths.map(p => `- ${p}`).join('\n')}\n（请使用 Read 工具读取并分析这些图片）`;
+          contextualMessage = contextualMessage + fallbackNote;
+          console.log(`[HTTPServer] Fallback to Read tool for ${failedPaths.length} image(s)`);
+        }
+      }
       // ─────────────────────────────────────────────────────────────────────
 
       // Stream process
@@ -987,6 +1064,7 @@ export async function createHTTPServer(options: HTTPServerOptions) {
         if ((m as any).protocol) model.protocol = (m as any).protocol;
         if ((m as any).provider) model.provider = (m as any).provider;
         if ((m as any).enabled !== undefined) model.enabled = (m as any).enabled;
+        if ((m as any).capabilities !== undefined) model.capabilities = (m as any).capabilities;
         // 向后兼容：也返回 type 字段
         model.type = (m as any).type || (m as any).protocol || 'openai';
         return model;
@@ -1351,7 +1429,7 @@ export async function createHTTPServer(options: HTTPServerOptions) {
   // POST /api/models - Add new model
   app.post('/api/models', async (req, res) => {
     try {
-      const { name, protocol, provider, model, apiKey, baseUrl, endpoint } = req.body;
+      const { name, protocol, provider, model, apiKey, baseUrl, endpoint, capabilities } = req.body;
 
       // Validate required fields
       if (!name || !model) {
@@ -1386,6 +1464,9 @@ export async function createHTTPServer(options: HTTPServerOptions) {
       if (baseUrl || endpoint) {
         newModel.baseURL = baseUrl || endpoint;
       }
+
+      // 能力标记
+      if (capabilities !== undefined) newModel.capabilities = capabilities;
 
       config.models.push(newModel);
       await saveConfig(config);
@@ -1426,7 +1507,7 @@ export async function createHTTPServer(options: HTTPServerOptions) {
   app.put('/api/models/:name', async (req, res) => {
     try {
       const oldName = req.params.name;
-      const { name, protocol, provider, model, apiKey, baseUrl, endpoint } = req.body;
+      const { name, protocol, provider, model, apiKey, baseUrl, endpoint, capabilities } = req.body;
 
       // Find model
       const modelIndex = config.models.findIndex((m: any) => m.name === oldName);
@@ -1465,6 +1546,11 @@ export async function createHTTPServer(options: HTTPServerOptions) {
         // 清理旧字段
         delete updatedModel.endpoint;
         delete updatedModel.baseUrl;
+      }
+
+      // 更新能力标记（undefined 表示前端未传，不覆盖；null/对象 表示有意设置）
+      if (capabilities !== undefined) {
+        updatedModel.capabilities = capabilities || undefined;
       }
 
       config.models[modelIndex] = updatedModel;

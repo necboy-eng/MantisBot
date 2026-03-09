@@ -203,10 +203,38 @@ export function anthropicToOpenAI(
 
       if (bType === 'tool_result') {
         const toolCallId = typeof b.tool_use_id === 'string' ? b.tool_use_id : '';
-        const toolContent = typeof b.content === 'string'
-          ? b.content
-          : JSON.stringify(b.content ?? '');
-        messages.push({ role: 'tool', tool_call_id: toolCallId, content: toolContent });
+        const rawContent = b.content;
+
+        // 处理 array content（可能包含 image blocks）
+        if (Array.isArray(rawContent)) {
+          const transformedParts: Array<{ type: string; text?: string; image_url?: { url: string } }> = [];
+          for (const item of rawContent) {
+            const itemType = typeof item.type === 'string' ? item.type : '';
+            if (itemType === 'image') {
+              // 转换 Anthropic image block 为 OpenAI image_url 格式
+              const source = typeof item.source === 'object' && item.source ? item.source as Record<string, unknown> : {};
+              const mediaType = typeof source.media_type === 'string' ? source.media_type : 'image/png';
+              const data = typeof source.data === 'string' ? source.data : '';
+              if (data) {
+                transformedParts.push({
+                  type: 'image_url',
+                  image_url: { url: `data:${mediaType};base64,${data}` },
+                });
+              }
+            } else if (itemType === 'text') {
+              const text = typeof item.text === 'string' ? item.text : '';
+              if (text) transformedParts.push({ type: 'text', text });
+            } else {
+              // 其他类型转为 JSON 字符串
+              transformedParts.push({ type: 'text', text: JSON.stringify(item) });
+            }
+          }
+          messages.push({ role: 'tool', tool_call_id: toolCallId, content: transformedParts });
+        } else {
+          // 保持原有 string content 处理逻辑
+          const toolContent = typeof rawContent === 'string' ? rawContent : JSON.stringify(rawContent ?? '');
+          messages.push({ role: 'tool', tool_call_id: toolCallId, content: toolContent });
+        }
         continue;
       }
     }

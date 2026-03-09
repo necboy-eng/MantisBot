@@ -234,7 +234,7 @@ function FileAttachmentCard({ attachment, onOpenCanvas }: { attachment: FileAtta
       <div className="flex-shrink-0">
         {isImage ? (
           <img
-            src={attachment.url}
+            src={appendTokenToUrl(attachment.url)}
             alt={attachment.name}
             className="w-12 h-12 object-cover rounded"
           />
@@ -822,12 +822,46 @@ function App() {
     });
   }
 
+  // 上传单个文件到 /api/files，追加到待发附件队列
+  const uploadFile = useCallback(async (file: File) => {
+    const base64 = await new Promise<string>((resolve) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve((reader.result as string).split(',')[1]);
+      reader.readAsDataURL(file);
+    });
+    const res = await authFetch('/api/files', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filename: file.name, content: base64, mimeType: file.type }),
+    });
+    if (res.ok) {
+      const attachment: FileAttachment = await res.json();
+      setPendingAttachments(prev => [...prev, attachment]);
+    }
+  }, []);
+
+  // 粘贴图片到输入框
+  const handlePaste = useCallback(async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    const imageItems = Array.from(items).filter(item => item.type.startsWith('image/'));
+    if (imageItems.length === 0) return;
+    e.preventDefault();
+    for (const item of imageItems) {
+      const file = item.getAsFile();
+      if (!file) continue;
+      const ext = item.type.split('/')[1] || 'png';
+      const namedFile = new File([file], `pasted-image-${Date.now()}.${ext}`, { type: item.type });
+      await uploadFile(namedFile);
+    }
+  }, [uploadFile]);
+
   // 键盘事件处理: Enter 发送,Shift+Enter 换行
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       const form = e.currentTarget.form;
-      if (form && input.trim()) {
+      if (form && (input.trim() || pendingAttachments.length > 0)) {
         form.requestSubmit();
       }
     }
@@ -1546,7 +1580,7 @@ function App() {
 
   async function sendMessage(e: React.FormEvent) {
     e.preventDefault();
-    if (!input.trim() || loading) return;
+    if ((!input.trim() && pendingAttachments.length === 0) || loading) return;
 
     const userMessage = input.trim();
     setInput('');
@@ -2685,9 +2719,17 @@ function App() {
           {pendingAttachments.length > 0 && (
             <div className="flex flex-wrap gap-2 mb-2 px-1">
               {pendingAttachments.map((att) => (
-                <div key={att.id} className="relative group flex items-center gap-1.5 pl-2 pr-1 py-1 bg-gray-100 dark:bg-gray-700 rounded-lg text-xs text-gray-600 dark:text-gray-300">
-                  <Image className="w-3.5 h-3.5 flex-shrink-0 text-blue-500" />
-                  <span className="max-w-[120px] truncate">{att.name}</span>
+                <div key={att.id} className="relative group flex items-center gap-1.5 pl-1.5 pr-1 py-1 bg-gray-100 dark:bg-gray-700 rounded-lg text-xs text-gray-600 dark:text-gray-300">
+                  {att.mimeType?.startsWith('image/') ? (
+                    <img
+                      src={appendTokenToUrl(att.url)}
+                      alt={att.name}
+                      className="w-8 h-8 object-cover rounded flex-shrink-0"
+                    />
+                  ) : (
+                    <Image className="w-3.5 h-3.5 flex-shrink-0 text-blue-500" />
+                  )}
+                  <span className="max-w-[80px] truncate">{att.name}</span>
                   <button
                     type="button"
                     onClick={() => setPendingAttachments(prev => prev.filter(a => a.id !== att.id))}
@@ -2718,6 +2760,7 @@ function App() {
                 value={input}
                 onChange={handleInputChange}
                 onKeyDown={handleKeyDown}
+                onPaste={handlePaste}
                 placeholder={t('app.inputPlaceholder')}
                 className="w-full px-4 pt-3 pb-2 bg-transparent border-none outline-none resize-none overflow-y-auto text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 text-sm leading-relaxed"
                 disabled={loading}
@@ -2803,24 +2846,9 @@ function App() {
                     className="hidden"
                     onChange={async (e) => {
                       const files = Array.from(e.target.files || []);
-                      if (!files.length) return;
                       for (const file of files) {
-                        const base64 = await new Promise<string>((resolve) => {
-                          const reader = new FileReader();
-                          reader.onload = () => resolve((reader.result as string).split(',')[1]);
-                          reader.readAsDataURL(file);
-                        });
-                        const res = await authFetch('/api/files', {
-                          method: 'POST',
-                          headers: { 'Content-Type': 'application/json' },
-                          body: JSON.stringify({ filename: file.name, content: base64, mimeType: file.type }),
-                        });
-                        if (res.ok) {
-                          const attachment: FileAttachment = await res.json();
-                          setPendingAttachments(prev => [...prev, attachment]);
-                        }
+                        await uploadFile(file);
                       }
-                      // 清空 input 以允许重复选同一文件
                       e.target.value = '';
                     }}
                   />
@@ -2858,7 +2886,7 @@ function App() {
                   ) : (
                     <button
                       type="submit"
-                      disabled={!input.trim()}
+                      disabled={!input.trim() && pendingAttachments.length === 0}
                       className="p-1.5 rounded-lg bg-primary-600 hover:bg-primary-700 disabled:bg-gray-200 dark:disabled:bg-gray-700 text-white disabled:text-gray-400 dark:disabled:text-gray-500 transition-colors disabled:cursor-not-allowed"
                       title={t('app.send')}
                     >

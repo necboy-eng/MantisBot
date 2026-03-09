@@ -835,9 +835,6 @@ export class ClaudeAgentRunner extends EventEmitter {
         })
       : null;
 
-    // 构建消息历史
-    const messages = this.buildMessages(userMessage, conversationHistory);
-
     // 配置选项
     const options: Record<string, unknown> = {
       // 将 Skills 内容注入为系统提示词，传给 Claude Agent SDK
@@ -1397,28 +1394,6 @@ export class ClaudeAgentRunner extends EventEmitter {
       toolCalls,
       attachments: attachments.length > 0 ? attachments : undefined,
     };
-  }
-
-  /**
-   * 构建消息列表
-   */
-  private buildMessages(userMessage: string, history: LLMMessage[]): LLMMessage[] {
-    const messages: LLMMessage[] = [];
-
-    if (this.options.systemPrompt) {
-      messages.push({
-        role: 'system',
-        content: this.options.systemPrompt,
-      });
-    }
-
-    messages.push(...history);
-    messages.push({
-      role: 'user',
-      content: userMessage,
-    });
-
-    return messages;
   }
 
   /**

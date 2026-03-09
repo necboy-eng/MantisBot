@@ -9,6 +9,7 @@
 
 import http from 'http';
 import https from 'https';
+import { randomUUID } from 'node:crypto';
 import {
   anthropicToOpenAI,
   buildOpenAIChatCompletionsURL,
@@ -53,6 +54,41 @@ export function decodeUpstreamConfig(apiKey: string | undefined): UpstreamConfig
 let proxyServer: http.Server | null = null;
 let proxyPort: number | null = null;
 const PROXY_HOST = '127.0.0.1';
+
+// ─── 视觉图片注册表 ───────────────────────────────────────────────────────────
+// 用于在 http-server.ts 与 OpenAI Proxy 之间传递图片数据（绕过 Claude SDK 的 string-only prompt 限制）
+// key: injectId（UUID）  value: 图片 content blocks 数组
+export type ImageBlock = {
+  type: 'image';
+  source: { type: 'base64'; media_type: string; data: string };
+};
+
+/** process.env 中用于传递本次请求图片注入 ID 的键名 */
+export const VISION_INJECT_ENV_KEY = 'VISION_INJECT_ID' as const;
+
+const pendingImages = new Map<string, ImageBlock[]>();
+
+/**
+ * 注册一组图片，返回 injectId（用作请求标识）
+ * Proxy 收到带有此 ID 的请求时会自动注入图片到最后一条 user message
+ */
+export function registerPendingImages(images: ImageBlock[]): string {
+  const id = randomUUID();
+  pendingImages.set(id, images);
+  // 30 秒后自动清理（防止泄漏）
+  setTimeout(() => pendingImages.delete(id), 30_000);
+  console.log(`[OpenAIProxy] Registered ${images.length} image(s) with id: ${id}`);
+  return id;
+}
+
+/**
+ * 消费已注册的图片（取出并删除）
+ */
+export function consumePendingImages(id: string): ImageBlock[] | null {
+  const images = pendingImages.get(id) ?? null;
+  if (images) pendingImages.delete(id);
+  return images;
+}
 
 // ─── 生命周期 ─────────────────────────────────────────────────────────────────
 
@@ -148,12 +184,6 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
 
   const { baseUrl: upstreamBaseURL, apiKey: upstreamApiKey, model: upstreamModel } = upstream;
 
-  // 调试：打印所有请求头（排除已解码的 api key）
-  const debugHeaders = { ...req.headers };
-  delete debugHeaders['x-api-key'];
-  delete debugHeaders['authorization'];
-  console.log('[OpenAIProxy] Incoming headers:', JSON.stringify(debugHeaders, null, 2));
-
   // 读取请求体
   const rawBody = await readBody(req);
   let anthropicBody: unknown;
@@ -167,6 +197,39 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
 
   const isStream = !!(anthropicBody as Record<string, unknown>)?.stream;
 
+  // ── 视觉图片注入：从进程级 Map 中取出图片并注入到最后一条 user message ────────
+  // 使用 process.env[VISION_INJECT_ENV_KEY] 传递（与 Proxy 同属同一 Node.js 进程）
+  const injectId = process.env[VISION_INJECT_ENV_KEY] ?? null;
+
+  if (injectId) {
+    // 立即清空，避免影响后续请求（只对第一次 LLM 调用生效）
+    delete process.env[VISION_INJECT_ENV_KEY];
+    console.log(`[OpenAIProxy] Consumed VISION_INJECT_ID: ${injectId}`);
+
+    const images = consumePendingImages(injectId);
+    if (images && images.length > 0) {
+      const body = anthropicBody as Record<string, unknown>;
+      const msgs = body.messages as Array<Record<string, unknown>> | undefined;
+      if (msgs && msgs.length > 0) {
+        // 找到最后一条 user 消息，将图片 blocks 追加到其 content 中
+        for (let i = msgs.length - 1; i >= 0; i--) {
+          if (msgs[i].role === 'user') {
+            const existingContent = msgs[i].content;
+            const textBlocks: Array<Record<string, unknown>> = typeof existingContent === 'string'
+              ? [{ type: 'text', text: existingContent }]
+              : Array.isArray(existingContent) ? existingContent as Array<Record<string, unknown>> : [];
+            // 追加图片 blocks（Anthropic 格式，protocol-transform 会转成 OpenAI image_url）
+            msgs[i].content = [...textBlocks, ...images];
+            console.log(`[OpenAIProxy] Injected ${images.length} image(s) into message[${i}]`);
+            break;
+          }
+        }
+      }
+    } else {
+      console.warn(`[OpenAIProxy] No images found for inject-id: ${injectId}`);
+    }
+  }
+  // ─────────────────────────────────────────────────────────────────────────────
   // 转换请求格式
   const openAIBody = anthropicToOpenAI(anthropicBody, upstreamModel);
   if (isStream) {
@@ -177,7 +240,6 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
 
   const targetURL = buildOpenAIChatCompletionsURL(upstreamBaseURL);
   console.log(`[OpenAIProxy] → ${upstreamModel} @ ${targetURL}`);
-  console.log('[OpenAIProxy] OpenAI request body (first 500 chars):', JSON.stringify(openAIBody).slice(0, 500));
 
   // 转发到上游（透传 SDK 发来的请求头，供需要识别 agent 身份的上游端点使用）
   await forwardToUpstream(targetURL, upstreamApiKey, openAIBody, isStream, res, req.headers);

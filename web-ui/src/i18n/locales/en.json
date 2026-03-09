@@ -386,6 +386,7 @@
     "fieldSkills": "Enable Skills",
     "fieldSkillsHint": "(none selected = all skills disabled)",
     "selectedSkills": "{{count}} selected",
+    "fieldDeliveryChannel": "Delivery Channel",
     "fieldEnabled": "Enable immediately",
     "saveEdit": "Save Changes",
     "saveCreate": "Create Task",

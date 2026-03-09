@@ -402,6 +402,7 @@
     "fieldSkills": "启用 Skills",
     "fieldSkillsHint": "（未选择则禁用所有 Skill）",
     "selectedSkills": "已选 {{count}} 个",
+    "fieldDeliveryChannel": "投递渠道",
     "fieldEnabled": "立即启用",
     "saveEdit": "保存修改",
     "saveCreate": "创建任务",
