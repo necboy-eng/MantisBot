@@ -407,7 +407,15 @@
     "saveEdit": "保存修改",
     "saveCreate": "创建任务",
     "cancel": "取消",
-    "confirmDelete": "确定删除任务 \"{{name}}\"？"
+    "confirmDelete": "确定删除任务 \"{{name}}\"？",
+    "deliveryChannelLast": "最后一次会话",
+    "deliveryChannelWeb": "Web 前端",
+    "deliveryChannelFeishu": "飞书",
+    "deliveryChannelWecom": "企业微信",
+    "deliveryChannelDingtalk": "钉钉",
+    "deliveryChannelSlack": "Slack",
+    "deliveryChannelWhatsapp": "WhatsApp",
+    "deliveryChannelWechat": "微信"
   },
   "evolution": {
     "noProposals": "暂无演变提议",

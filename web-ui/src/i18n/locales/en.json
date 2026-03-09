@@ -391,7 +391,15 @@
     "saveEdit": "Save Changes",
     "saveCreate": "Create Task",
     "cancel": "Cancel",
-    "confirmDelete": "Delete task \"{{name}}\"?"
+    "confirmDelete": "Delete task \"{{name}}\"?",
+    "deliveryChannelLast": "Last Session",
+    "deliveryChannelWeb": "Web UI",
+    "deliveryChannelFeishu": "Feishu",
+    "deliveryChannelWecom": "WeCom",
+    "deliveryChannelDingtalk": "DingTalk",
+    "deliveryChannelSlack": "Slack",
+    "deliveryChannelWhatsapp": "WhatsApp",
+    "deliveryChannelWechat": "WeChat"
   },
   "evolution": {
     "noProposals": "No proposals yet",

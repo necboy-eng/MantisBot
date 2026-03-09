@@ -53,7 +53,8 @@ const defaultFormData = {
   payloadText: '',
   model: '',          // 空 = 使用系统默认模型
   skills: [] as string[],
-  enabled: true
+  enabled: true,
+  deliveryChannel: 'last' as string  // 投递渠道：last/web/feishu/wecom/dingtalk 等
 };
 
 export function CronPanel({ isOpen, onClose }: CronPanelProps) {
@@ -67,6 +68,18 @@ export function CronPanel({ isOpen, onClose }: CronPanelProps) {
   const [formData, setFormData] = useState(defaultFormData);
   const [availableModels, setAvailableModels] = useState<{ name: string }[]>([]);
   const [availableSkills, setAvailableSkills] = useState<{ name: string; description: string }[]>([]);
+
+  // 可用的投递渠道选项（使用国际化）
+  const deliveryChannelOptions = [
+    { value: 'last', label: t('cron.deliveryChannelLast') },
+    { value: 'web', label: t('cron.deliveryChannelWeb') },
+    { value: 'feishu', label: t('cron.deliveryChannelFeishu') },
+    { value: 'wecom', label: t('cron.deliveryChannelWecom') },
+    { value: 'dingtalk', label: t('cron.deliveryChannelDingtalk') },
+    { value: 'slack', label: t('cron.deliveryChannelSlack') },
+    { value: 'whatsapp', label: t('cron.deliveryChannelWhatsapp') },
+    { value: 'wechat', label: t('cron.deliveryChannelWechat') },
+  ];
 
   useEffect(() => {
     if (isOpen) {
@@ -174,7 +187,8 @@ export function CronPanel({ isOpen, onClose }: CronPanelProps) {
       payloadText: job.payload.text || job.payload.message || '',
       model: job.payload.model || '',
       skills: job.payload.skills || [],
-      enabled: job.enabled
+      enabled: job.enabled,
+      deliveryChannel: job.delivery?.channel || 'last'
     });
     setShowForm(true);
   }
@@ -223,7 +237,14 @@ export function CronPanel({ isOpen, onClose }: CronPanelProps) {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             id: editingJob.id,
-            patch: { name: formData.name, description: formData.description, enabled: formData.enabled, schedule, payload }
+            patch: {
+              name: formData.name,
+              description: formData.description,
+              enabled: formData.enabled,
+              schedule,
+              payload,
+              delivery: { mode: 'announce', channel: formData.deliveryChannel }
+            }
           })
         });
       } else {
@@ -238,7 +259,7 @@ export function CronPanel({ isOpen, onClose }: CronPanelProps) {
             sessionTarget: 'isolated',
             wakeMode: 'now',
             payload,
-            delivery: { mode: 'announce', channel: 'last' }
+            delivery: { mode: 'announce', channel: formData.deliveryChannel }
           })
         });
       }
@@ -553,6 +574,20 @@ export function CronPanel({ isOpen, onClose }: CronPanelProps) {
                       )}
                     </div>
                   )}
+
+                  {/* 投递渠道选择 */}
+                  <div>
+                    <label className="block text-sm font-medium mb-1">{t('cron.fieldDeliveryChannel') || '投递渠道'}</label>
+                    <select
+                      value={formData.deliveryChannel}
+                      onChange={e => setFormData({ ...formData, deliveryChannel: e.target.value })}
+                      className="w-full px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800"
+                    >
+                      {deliveryChannelOptions.map(opt => (
+                        <option key={opt.value} value={opt.value}>{opt.label}</option>
+                      ))}
+                    </select>
+                  </div>
 
                   <div className="flex items-center gap-2">
                     <input
