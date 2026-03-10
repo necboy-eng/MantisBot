@@ -75,7 +75,8 @@ jobs:
           images: ghcr.io/${{ github.repository_owner }}/mantisbot
           tags: |
             type=ref,event=tag
-            type=sha,prefix={{branch}}-
+            type=sha,prefix=sha-
+            type=raw,value=latest,enable=${{ !contains(github.ref, 'alpha') && !contains(github.ref, 'beta') }}
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
