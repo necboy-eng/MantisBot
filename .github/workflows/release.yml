@@ -31,6 +31,23 @@ jobs:
       - name: Build TypeScript
         run: npm run build
 
+      - name: Build Web UI
+        run: npm run build:ui
+
+      - name: Upload backend artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist
+          retention-days: 1
+
+      - name: Upload web-ui artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-ui-dist
+          path: web-ui/dist
+          retention-days: 1
+
   build-and-push-docker:
     needs: test
     runs-on: ubuntu-latest
@@ -87,14 +104,19 @@ jobs:
           name: dist
           path: dist
 
+      - name: Download web-ui artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: web-ui-dist
+          path: web-ui-dist
+
       - name: Create Source Archive
         run: |
           tar -czf mantisbot-source.tar.gz --exclude='.git' --exclude='node_modules' --exclude='dist' --exclude='web-ui' --exclude='.worktrees' --exclude='*.log' .
 
       - name: Create Web UI Archive
-        working-directory: ./web-ui
         run: |
-          tar -czf ../mantisbot-web-ui.tar.gz --exclude='node_modules' --exclude='.vite' --exclude='*.log' .
+          tar -czf mantisbot-web-ui.tar.gz -C web-ui-dist .
 
       - name: Generate Release Notes
         id: release-notes
