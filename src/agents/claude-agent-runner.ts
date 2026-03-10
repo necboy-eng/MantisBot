@@ -918,6 +918,29 @@ export class ClaudeAgentRunner extends EventEmitter {
       },
       // 只有在有 MCP 工具时才添加 mcpServers
       ...(mcpServer ? { mcpServers: { 'mantis-tools': mcpServer } } : {}),
+      // 收集插件的 MCP 服务器配置（SDK 格式）
+      // 将所有启用插件的 .mcp.json 配置合并到 mcpServers
+      ...(() => {
+        const pluginLoader = getGlobalPluginLoader();
+        if (!pluginLoader) return {};
+        const pluginMcpServers = pluginLoader.getAllMcpServers();
+        if (Object.keys(pluginMcpServers).length > 0) {
+          console.log('[ClaudeAgentRunner] Adding plugin MCP servers:', Object.keys(pluginMcpServers));
+        }
+        return { mcpServers: pluginMcpServers };
+      })(),
+      // 收集插件的 SDK 配置（用于加载插件 commands/skills）
+      // 注意：SDK 期望插件目录包含 .claude-plugin/plugin.json
+      // MantisBot 使用 plugin.json，因此需要适配
+      ...(() => {
+        const pluginLoader = getGlobalPluginLoader();
+        if (!pluginLoader) return {};
+        const sdkPlugins = pluginLoader.toSdkPlugins();
+        if (sdkPlugins.length > 0) {
+          console.log('[ClaudeAgentRunner] Loading SDK plugins:', sdkPlugins.map(p => p.path));
+        }
+        return { plugins: sdkPlugins };
+      })(),
       // 权限回调
       canUseTool: async (
         toolName: string,

@@ -110,6 +110,7 @@ export function getDefaultConfig(): Config {
     disabledPlugins: [],
     activeProfile: 'default',
     agentTeams: [],
+    useSdkPlugins: true,  // 启用 SDK plugin 模式
   } as Config;
 }
 

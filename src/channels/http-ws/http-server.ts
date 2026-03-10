@@ -539,6 +539,49 @@ export async function createHTTPServer(options: HTTPServerOptions) {
           return;
         }
       }
+
+      // ── Plugin Command 检测 ──────────────────────────────────────────────
+      // 格式: /plugin:command args
+      // Plugin command 会将 command 内容作为 prompt 发送给 Agent
+      let actualMessage = message;
+      if (message.startsWith('/') && message.includes(':') && options.pluginLoader) {
+        const pluginParsed = options.pluginLoader.parseCommandMessage(message);
+        if (pluginParsed) {
+          const { pluginName, commandName, args } = pluginParsed;
+          const pluginCommand = options.pluginLoader.getCommand(pluginName, commandName);
+
+          if (pluginCommand) {
+            // 构建 command prompt（替换占位符并移除 frontmatter）
+            actualMessage = options.pluginLoader.buildCommandPrompt(pluginCommand, args);
+            console.log(`[HTTPServer] Plugin command: /${pluginName}:${commandName}, args: ${args?.slice(0, 50)}`);
+            // 把原始用户消息写入 session（显示给用户）
+            options.sessionManager.addMessage(chatId, { role: 'user', content: message });
+          } else {
+            // Plugin command 不存在，返回错误提示
+            const availableCommands = options.pluginLoader.getCommands()
+              .filter(c => c.pluginName === pluginName)
+              .map(c => `  /${pluginName}:${c.name} - ${c.description || '无描述'}`)
+              .join('\n');
+            const errorResponse = `未找到命令: /${pluginName}:${commandName}\n\n可用的 ${pluginName} 插件命令:\n${availableCommands || '  (无)'}`;
+
+            options.sessionManager.addMessage(chatId, { role: 'user', content: message });
+            const assistantMsg = options.sessionManager.addMessage(chatId, { role: 'assistant', content: errorResponse });
+
+            res.setHeader('Content-Type', 'text/event-stream');
+            res.setHeader('Cache-Control', 'no-cache');
+            res.setHeader('Connection', 'keep-alive');
+            res.setHeader('X-Accel-Buffering', 'no');
+            res.write(`event: chunk\ndata: ${JSON.stringify({ content: errorResponse })}\n\n`);
+            res.write(`event: done\ndata: ${JSON.stringify({
+              messageId: assistantMsg?.id || uuidv4(),
+              attachments: undefined,
+              sessionName: session.name
+            })}\n\n`);
+            res.end();
+            return;
+          }
+        }
+      }
       // ─────────────────────────────────────────────────────────────
 
       // Validate API key for the selected model — fail fast before any LLM call
@@ -617,13 +660,20 @@ export async function createHTTPServer(options: HTTPServerOptions) {
         });
       }
 
-      // Add user message
-      session.messages.push({
-        id: uuidv4(),
-        role: 'user',
-        content: message,
-        timestamp: Date.now()
-      });
+      // Add user message (if not already added by plugin command handling)
+      // plugin command 已经在上面添加了用户消息
+      const isPluginCommand = message.startsWith('/') && message.includes(':') && options.pluginLoader?.getCommand(
+        message.split(':')[0]?.slice(1) || '',
+        message.split(':')[1]?.split(' ')[0] || ''
+      );
+      if (!isPluginCommand) {
+        session.messages.push({
+          id: uuidv4(),
+          role: 'user',
+          content: message,
+          timestamp: Date.now()
+        });
+      }
 
       // 🚀 在用户提交第一条消息后立即生成标题（不等待 AI 响应完成）
       // 这样用户可以更快看到有意义的会话标题
@@ -670,17 +720,19 @@ export async function createHTTPServer(options: HTTPServerOptions) {
       let   collectedThinking = '';
 
       // 记忆检索：在 streamRun 前搜索相关记忆，构建上下文提示词
-      let contextualMessage = message;
-      if (options.memoryManager) {
+      // 对于 plugin command，跳过记忆检索（command prompt 已包含完整上下文）
+      let contextualMessage = actualMessage;
+      const isPluginCommandMessage = message.startsWith('/') && message.includes(':');
+      if (options.memoryManager && !isPluginCommandMessage) {
         try {
-          const memories = await options.memoryManager.searchHybrid('default', message, {
+          const memories = await options.memoryManager.searchHybrid('default', actualMessage, {
             limit: 7,
             sessionKey: undefined  // 跨 session 搜索
           });
           console.log(`[HTTPServer] Memory search found ${memories.length} memories for stream`);
           if (memories.length > 0) {
             const memoryContext = memories.map((m, i) => `${i + 1}. ${m.content}`).join('\n');
-            contextualMessage = `📋 **相关记忆**（请在回答前先参考这些信息）：\n${memoryContext}\n\n---\n\n💬 **用户问题**：\n${message}\n\n💡 **提示**：请先查看上面的相关记忆，然后回答用户问题。如果记忆中有相关信息，请直接使用。`;
+            contextualMessage = `📋 **相关记忆**（请在回答前先参考这些信息）：\n${memoryContext}\n\n---\n\n💬 **用户问题**：\n${actualMessage}\n\n💡 **提示**：请先查看上面的相关记忆，然后回答用户问题。如果记忆中有相关信息，请直接使用。`;
           }
         } catch (err) {
           console.error('[HTTPServer] Memory search failed (stream):', err);

@@ -553,6 +553,34 @@ export const ConfigSchema = z.object({
   firecrawlApiKey: z.string().optional(),
   // Agent Teams 配置
   agentTeams: z.array(AgentTeamSchema).optional().default([]),
+
+  // ============================================
+  // SDK 插件配置
+  // ============================================
+
+  // 是否使用 SDK plugin 模式（默认 true）
+  // 启用后，将通过 options.plugins 和 options.mcpServers 加载插件
+  useSdkPlugins: z.boolean().optional().default(true),
+
+  // 全局 MCP 服务器配置（优先级最高）
+  // 格式与 SDK mcpServers 一致，直接传递给 Claude Agent SDK
+  mcpServers: z.record(z.string(), z.union([
+    z.object({
+      type: z.literal('stdio'),
+      command: z.string(),
+      args: z.array(z.string()).optional(),
+      env: z.record(z.string(), z.string()).optional(),
+    }),
+    z.object({
+      type: z.literal('sse'),
+      url: z.string(),
+    }),
+    z.object({
+      type: z.literal('http'),
+      url: z.string(),
+    }),
+  ])).optional(),
+
   // 可靠性和错误处理配置
   reliability: z.object({
     enabled: z.boolean().default(true),

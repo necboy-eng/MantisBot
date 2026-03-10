@@ -13,6 +13,7 @@ import { UnifiedAgentRunner } from '../agents/unified-runner.js';
 import { SessionManager } from '../session/manager.js';
 import { MemoryManager } from '../memory/manager.js';
 import { ToolRegistry } from '../agents/tools/registry.js';
+import type { PluginLoader } from '../plugins/loader.js';
 
 export { MessageDispatcher } from './dispatch.js';
 export type { DispatchResult, StreamGenerator } from './dispatch.js';
@@ -20,16 +21,19 @@ export type { DispatchResult, StreamGenerator } from './dispatch.js';
 export class AutoReply {
   private dispatcher: MessageDispatcher;
   private commandRegistry: CommandRegistry;
+  private pluginLoader?: PluginLoader;
 
   constructor(
     toolRegistry: ToolRegistry,
     sessionManager: SessionManager,
     memoryManager: MemoryManager,
-    agentRunner?: IAgentRunner
+    agentRunner?: IAgentRunner,
+    pluginLoader?: PluginLoader
   ) {
     const runner = agentRunner || new UnifiedAgentRunner(toolRegistry);
     this.dispatcher = new MessageDispatcher(runner, sessionManager, memoryManager);
     this.commandRegistry = new CommandRegistry();
+    this.pluginLoader = pluginLoader;
 
     // Register commands
     registerHelpCommand(this.commandRegistry);
@@ -53,9 +57,11 @@ export class AutoReply {
   ): Promise<DispatchResult | null> {
     // Check for plugin commands first (/plugin:command format)
     if (content.startsWith('/') && content.includes(':')) {
-      // Handle plugin command - return null to let caller handle it
-      // Plugin commands are handled separately via PluginCommandHandler
-      return null;
+      const result = await this.handlePluginCommand(content, context);
+      if (result) {
+        return result;
+      }
+      // 如果不是有效的 plugin command，继续处理其他逻辑
     }
 
     // Check for built-in commands
@@ -88,6 +94,80 @@ export class AutoReply {
 
     // Handle as regular message
     return this.dispatcher.dispatch(message, channelContext);
+  }
+
+  /**
+   * 处理 plugin command (/plugin:command 格式)
+   */
+  private async handlePluginCommand(
+    content: string,
+    context: { platform: string; chatId: string; userId: string }
+  ): Promise<DispatchResult | null> {
+    if (!this.pluginLoader) {
+      console.log('[AutoReply] PluginLoader not available, skipping plugin command');
+      return null;
+    }
+
+    const parsed = this.pluginLoader.parseCommandMessage(content);
+    if (!parsed) {
+      return null;
+    }
+
+    const { pluginName, commandName, args } = parsed;
+    const command = this.pluginLoader.getCommand(pluginName, commandName);
+
+    if (!command) {
+      console.log(`[AutoReply] Command not found: ${pluginName}:${commandName}`);
+      return {
+        response: `未找到命令: /${pluginName}:${commandName}\n\n可用的 ${pluginName} 插件命令:\n${this.listPluginCommands(pluginName)}`,
+        success: false,
+      };
+    }
+
+    console.log(`[AutoReply] Executing plugin command: ${pluginName}:${commandName}, args: ${args}`);
+
+    // 构建 command prompt
+    const commandPrompt = this.pluginLoader.buildCommandPrompt(command, args);
+
+    // Build ChannelMessage with command prompt
+    const message: ChannelMessage = {
+      id: `${Date.now()}`,
+      content: commandPrompt,
+      chatId: context.chatId,
+      userId: context.userId,
+      platform: context.platform,
+      timestamp: Date.now(),
+    };
+
+    // 标记这是一个 plugin command 消息（用于显示）
+    (message as any)._pluginCommand = `/${pluginName}:${commandName}`;
+    (message as any)._originalContent = args;
+
+    // Build ChannelContext
+    const channelContext: ChannelContext = {
+      platform: context.platform,
+      chatId: context.chatId,
+      userId: context.userId,
+    };
+
+    // 分发处理
+    return this.dispatcher.dispatch(message, channelContext);
+  }
+
+  /**
+   * 列出指定插件的可用命令
+   */
+  private listPluginCommands(pluginName: string): string {
+    if (!this.pluginLoader) return '';
+
+    const plugin = this.pluginLoader.getPlugin(pluginName);
+    if (!plugin) {
+      return `插件 "${pluginName}" 不存在`;
+    }
+
+    return plugin.commands
+      .map(c => `  /${pluginName}:${c.name} - ${c.description || '无描述'}`)
+      .join('\n');
   }
 
   /**

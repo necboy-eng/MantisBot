@@ -1,6 +1,6 @@
 {
   "name": "mantis-bot",
-  "version": "1.2.2",
+  "version": "1.2.4",
   "type": "module",
   "scripts": {
     "predev": "node scripts/kill-port.cjs 8118",
@@ -21,6 +21,7 @@
     "@antv/infographic": "^0.2.16",
     "@larksuiteoapi/node-sdk": "^1.59.0",
     "@mariozechner/pi-coding-agent": "^0.52.12",
+    "@modelcontextprotocol/sdk": "^1.27.1",
     "@slack/bolt": "^3.17.0",
     "@types/adm-zip": "^0.5.7",
     "@types/multer": "^2.0.0",

@@ -2,7 +2,7 @@
 
 import * as fs from 'fs/promises';
 import * as path from 'path';
-import { Plugin, PluginManifest, Skill, Command, MCPConfig } from './types';
+import { Plugin, PluginManifest, Skill, Command, MCPConfig, SdkPluginConfig, SdkMcpServerConfig, toSdkMcpConfig } from './types';
 
 // 全局 PluginLoader 实例引用，用于刷新 skills prompt
 let globalPluginLoader: PluginLoader | null = null;
@@ -235,6 +235,164 @@ export class PluginLoader {
     }
 
     const content = await fs.readFile(mcpPath, 'utf-8');
-    return JSON.parse(content);
+    const parsed = JSON.parse(content);
+
+    // 支持两种格式：
+    // 1. SDK 官方格式: { "mcpServers": {...} }
+    // 2. 内部格式: { "servers": {...} }
+    if (parsed.mcpServers) {
+      return { servers: parsed.mcpServers };
+    }
+    return parsed;
+  }
+
+  // ============================================
+  // SDK 适配方法
+  // ============================================
+
+  /**
+   * 转换为 SDK plugins 配置格式
+   * 用于 Claude Agent SDK 的 options.plugins 参数
+   */
+  toSdkPlugins(): SdkPluginConfig[] {
+    return this.getAllPlugins()
+      .filter(p => p.enabled)
+      .map(p => ({
+        type: 'local' as const,
+        path: p.path,
+      }));
+  }
+
+  /**
+   * 获取所有插件的 MCP 服务器配置（SDK 格式）
+   * 合并所有启用插件的 .mcp.json 配置
+   */
+  getAllMcpServers(): Record<string, SdkMcpServerConfig> {
+    const servers: Record<string, SdkMcpServerConfig> = {};
+
+    for (const plugin of this.getAllPlugins()) {
+      if (!plugin.enabled || !plugin.mcpConfig?.servers) {
+        continue;
+      }
+
+      for (const [name, config] of Object.entries(plugin.mcpConfig.servers)) {
+        // 使用 plugin-name_server-name 格式避免冲突
+        const serverKey = `${plugin.name}-${name}`;
+        servers[serverKey] = toSdkMcpConfig(config);
+      }
+    }
+
+    return servers;
+  }
+
+  /**
+   * 获取指定插件的 MCP 服务器配置（SDK 格式）
+   */
+  getPluginMcpServers(pluginName: string): Record<string, SdkMcpServerConfig> {
+    const plugin = this.getPlugin(pluginName);
+    if (!plugin?.enabled || !plugin.mcpConfig?.servers) {
+      return {};
+    }
+
+    const servers: Record<string, SdkMcpServerConfig> = {};
+    for (const [name, config] of Object.entries(plugin.mcpConfig.servers)) {
+      servers[name] = toSdkMcpConfig(config);
+    }
+
+    return servers;
+  }
+
+  /**
+   * 获取所有启用的 skills（用于 SDK agents.skills 配置）
+   */
+  getEnabledSkillNames(): string[] {
+    return this.getSkills().map(s => s.name);
+  }
+
+  /**
+   * 获取所有启用的 commands（用于 SDK slash commands）
+   * 返回格式：plugin-name:command-name
+   */
+  getEnabledCommandNames(): string[] {
+    return this.getCommands().map(c => `${c.pluginName}:${c.name}`);
+  }
+
+  /**
+   * 获取指定的 command
+   * @param pluginName 插件名称
+   * @param commandName 命令名称
+   * @returns Command 对象，如果不存在则返回 undefined
+   */
+  getCommand(pluginName: string, commandName: string): Command | undefined {
+    const plugin = this.loadedPlugins.get(pluginName);
+    if (!plugin || !plugin.enabled) {
+      return undefined;
+    }
+    return plugin.commands.find(c => c.name === commandName);
+  }
+
+  /**
+   * 解析 command 格式的消息
+   * @param message 用户消息，格式如 "/data:analyze sales data"
+   * @returns 解析结果，包含 pluginName, commandName, args
+   */
+  parseCommandMessage(message: string): { pluginName: string; commandName: string; args: string } | null {
+    // 检查是否为 plugin command 格式: /plugin:command args
+    if (!message.startsWith('/') || !message.includes(':')) {
+      return null;
+    }
+
+    // 移除开头的 /
+    const withoutSlash = message.slice(1);
+    const colonIndex = withoutSlash.indexOf(':');
+
+    if (colonIndex === -1) {
+      return null;
+    }
+
+    const pluginName = withoutSlash.slice(0, colonIndex);
+    const rest = withoutSlash.slice(colonIndex + 1);
+
+    // 分离 command name 和 args
+    const spaceIndex = rest.indexOf(' ');
+    const commandName = spaceIndex === -1 ? rest : rest.slice(0, spaceIndex);
+    const args = spaceIndex === -1 ? '' : rest.slice(spaceIndex + 1).trim();
+
+    return { pluginName, commandName, args };
+  }
+
+  /**
+   * 构建 command 的完整 prompt
+   * @param command Command 对象
+   * @param args 用户输入的参数
+   * @returns 构建好的 prompt
+   */
+  buildCommandPrompt(command: Command, args: string): string {
+    let prompt = command.content;
+
+    // 解析 frontmatter 获取 argument-hint
+    const frontmatterMatch = prompt.match(/^---\n([\s\S]*?)\n---/);
+    if (frontmatterMatch) {
+      const frontmatter = frontmatterMatch[1];
+      const argHintMatch = frontmatter.match(/argument-hint:\s*(.+)/);
+
+      // 如果有 argument-hint，尝试将 args 替换到 $1, $2 等占位符
+      if (argHintMatch) {
+        const argParts = args.split(/\s+/).filter(Boolean);
+        for (let i = 0; i < argParts.length; i++) {
+          prompt = prompt.replace(new RegExp(`\\$${i + 1}`, 'g'), argParts[i]);
+        }
+      }
+    }
+
+    // 移除 frontmatter，只保留实际内容
+    prompt = prompt.replace(/^---\n[\s\S]*?\n---\n*/, '');
+
+    // 如果还有 args 且没有占位符，追加到 prompt 末尾
+    if (args && !prompt.includes('$1')) {
+      prompt += `\n\nUser input: ${args}`;
+    }
+
+    return prompt;
   }
 }

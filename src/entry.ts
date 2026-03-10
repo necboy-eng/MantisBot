@@ -231,8 +231,8 @@ export async function main(): Promise<void> {
   }
   console.log(`[MantisBot] Registered ${nasTools.length} NAS tools`);
 
-  // Initialize auto-reply (with shared AgentRunner)
-  const autoReply = new AutoReply(toolRegistry, sessionManager, memoryManager, agentRunner);
+  // Initialize auto-reply (with shared AgentRunner and PluginLoader)
+  const autoReply = new AutoReply(toolRegistry, sessionManager, memoryManager, agentRunner, pluginLoader);
 
   // Initialize tunnel services (内网穿透)
   let tunnelManager: TunnelManager | undefined;

@@ -1,12 +1,16 @@
 // src/plugins/mcp-client.ts
 
-import { MCPConnection, MCPServerConfig, MCPTool } from './types';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { MCPServerConfig, MCPTool, MCPConnection } from './types.js';
 
 /**
  * MCP Client for connecting to MCP servers
  *
- * This is a framework implementation. Full MCP protocol support
- * requires @modelcontextprotocol/sdk package.
+ * Uses @modelcontextprotocol/sdk for full MCP protocol support.
+ * Supports stdio, SSE, and HTTP transports.
  */
 export class MCPClient {
   private connections: Map<string, MCPConnection> = new Map();
@@ -15,46 +19,143 @@ export class MCPClient {
    * Connect to an MCP server
    */
   async connect(serverName: string, config: MCPServerConfig): Promise<MCPConnection> {
-    let client: any;
-
-    switch (config.type) {
-      case 'http':
-        client = await this.createHTTPClient(config);
-        break;
-      case 'sse':
-        client = await this.createSSEClient(config);
-        break;
-      case 'stdio':
-        client = await this.createStdioClient(config);
-        break;
-      default:
-        throw new Error(`Unknown MCP server type: ${config.type}`);
+    // Check if already connected
+    const existing = this.connections.get(serverName);
+    if (existing?.client) {
+      console.log(`[MCP] Already connected to server: ${serverName}`);
+      return existing;
     }
 
-    const connection: MCPConnection = { serverName, config, client };
-    this.connections.set(serverName, connection);
+    const client = new Client(
+      { name: 'mantisbot', version: '1.0.0' },
+      { capabilities: {} }
+    );
 
-    console.log(`[MCP] Connected to server: ${serverName}`);
-    return connection;
+    try {
+      let transport;
+
+      switch (config.type) {
+        case 'stdio':
+          transport = await this.createStdioTransport(config);
+          break;
+        case 'sse':
+          transport = await this.createSSETransport(config);
+          break;
+        case 'http':
+          transport = await this.createHTTPTransport(config);
+          break;
+        default:
+          throw new Error(`Unknown MCP server type: ${(config as any).type}`);
+      }
+
+      await client.connect(transport);
+
+      const connection: MCPConnection = { serverName, config, client };
+      this.connections.set(serverName, connection);
+
+      console.log(`[MCP] Connected to server: ${serverName}`);
+      return connection;
+    } catch (error) {
+      console.error(`[MCP] Failed to connect to ${serverName}:`, error);
+      throw error;
+    }
   }
 
-  private async createHTTPClient(config: MCPServerConfig): Promise<any> {
-    // TODO: Implement HTTP MCP client using @modelcontextprotocol/sdk
-    // This requires the MCP SDK to be installed
-    console.warn('[MCP] HTTP client not fully implemented, skipping');
-    return null;
+  /**
+   * Create stdio transport for local process MCP servers
+   */
+  private async createStdioTransport(config: MCPServerConfig): Promise<StdioClientTransport> {
+    if (!config.command) {
+      throw new Error('stdio MCP server requires "command" field');
+    }
+
+    return new StdioClientTransport({
+      command: config.command,
+      args: config.args,
+      env: {
+        ...process.env as Record<string, string>,
+        ...config.env,
+      },
+    });
   }
 
-  private async createSSEClient(config: MCPServerConfig): Promise<any> {
-    // TODO: Implement SSE MCP client
-    console.warn('[MCP] SSE client not fully implemented, skipping');
-    return null;
+  /**
+   * Create SSE transport for Server-Sent Events MCP servers
+   * @deprecated SSE is deprecated, prefer HTTP transport
+   */
+  private async createSSETransport(config: MCPServerConfig): Promise<SSEClientTransport> {
+    if (!config.url) {
+      throw new Error('sse MCP server requires "url" field');
+    }
+
+    const url = new URL(config.url);
+
+    // Build request init with auth headers if provided
+    const requestInit: RequestInit = {};
+
+    if (config.auth) {
+      switch (config.auth.type) {
+        case 'bearer':
+          requestInit.headers = {
+            ...requestInit.headers as Record<string, string>,
+            'Authorization': `Bearer ${config.auth.token}`,
+          };
+          break;
+        case 'api_key':
+          requestInit.headers = {
+            ...requestInit.headers as Record<string, string>,
+            [config.auth.header || 'X-API-Key']: config.auth.value || config.auth.token || '',
+          };
+          break;
+        case 'basic':
+          requestInit.headers = {
+            ...requestInit.headers as Record<string, string>,
+            'Authorization': `Basic ${Buffer.from(config.auth.token || '').toString('base64')}`,
+          };
+          break;
+      }
+    }
+
+    return new SSEClientTransport(url, { requestInit });
   }
 
-  private async createStdioClient(config: MCPServerConfig): Promise<any> {
-    // TODO: Implement stdio MCP client
-    console.warn('[MCP] Stdio client not fully implemented, skipping');
-    return null;
+  /**
+   * Create HTTP transport for Streamable HTTP MCP servers
+   */
+  private async createHTTPTransport(config: MCPServerConfig): Promise<StreamableHTTPClientTransport> {
+    if (!config.url) {
+      throw new Error('http MCP server requires "url" field');
+    }
+
+    const url = new URL(config.url);
+
+    // Build request init with auth headers if provided
+    const requestInit: RequestInit = {};
+
+    if (config.auth) {
+      switch (config.auth.type) {
+        case 'bearer':
+          requestInit.headers = {
+            ...requestInit.headers as Record<string, string>,
+            'Authorization': `Bearer ${config.auth.token}`,
+          };
+          break;
+        case 'api_key':
+          requestInit.headers = {
+            ...requestInit.headers as Record<string, string>,
+            [config.auth.header || 'X-API-Key']: config.auth.value || config.auth.token || '',
+          };
+          break;
+        case 'basic':
+          requestInit.headers = {
+            ...requestInit.headers as Record<string, string>,
+            'Authorization': `Basic ${Buffer.from(config.auth.token || '').toString('base64')}`,
+          };
+          break;
+      }
+    }
+
+    return new StreamableHTTPClientTransport(url, { requestInit });
   }
 
   /**
@@ -70,8 +171,17 @@ export class MCPClient {
       return [];
     }
 
-    // TODO: Implement actual tool listing
-    return [];
+    try {
+      const { tools } = await connection.client.listTools();
+      return tools.map((tool: { name: string; description?: string; inputSchema: object }) => ({
+        name: tool.name,
+        description: tool.description || '',
+        inputSchema: tool.inputSchema as object,
+      }));
+    } catch (error) {
+      console.error(`[MCP] Failed to list tools from ${serverName}:`, error);
+      return [];
+    }
   }
 
   /**
@@ -87,9 +197,16 @@ export class MCPClient {
       throw new Error(`MCP server ${serverName} not initialized`);
     }
 
-    // TODO: Implement actual tool calling
-    console.warn(`[MCP] Calling tool ${toolName} on ${serverName} not implemented`);
-    return null;
+    try {
+      const result = await connection.client.callTool({
+        name: toolName,
+        arguments: args,
+      });
+      return result;
+    } catch (error) {
+      console.error(`[MCP] Failed to call tool ${toolName} on ${serverName}:`, error);
+      throw error;
+    }
   }
 
   /**
@@ -98,8 +215,12 @@ export class MCPClient {
   async disconnect(serverName: string): Promise<void> {
     const connection = this.connections.get(serverName);
     if (connection) {
-      if (connection.client && connection.client.close) {
-        await connection.client.close();
+      if (connection.client) {
+        try {
+          await connection.client.close();
+        } catch (error) {
+          console.error(`[MCP] Error closing connection to ${serverName}:`, error);
+        }
       }
       this.connections.delete(serverName);
       console.log(`[MCP] Disconnected from server: ${serverName}`);
@@ -110,10 +231,19 @@ export class MCPClient {
    * Disconnect all servers for a plugin
    */
   async disconnectAll(pluginName: string): Promise<void> {
-    for (const [serverName] of Array.from(this.connections)) {
+    for (const [serverName] of Array.from(this.connections.keys())) {
       if (serverName.startsWith(`${pluginName}_`)) {
         await this.disconnect(serverName);
       }
+    }
+  }
+
+  /**
+   * Disconnect all servers
+   */
+  async disconnectAllServers(): Promise<void> {
+    for (const serverName of Array.from(this.connections.keys())) {
+      await this.disconnect(serverName);
     }
   }
 
@@ -129,5 +259,37 @@ export class MCPClient {
    */
   getConnectedServers(): string[] {
     return Array.from(this.connections.keys());
+  }
+
+  /**
+   * Get all tools from all connected servers
+   */
+  async getAllTools(): Promise<Map<string, MCPTool[]>> {
+    const allTools = new Map<string, MCPTool[]>();
+
+    for (const serverName of this.connections.keys()) {
+      const tools = await this.listTools(serverName);
+      allTools.set(serverName, tools);
+    }
+
+    return allTools;
+  }
+
+  /**
+   * Get connection for a server
+   */
+  getConnection(serverName: string): MCPConnection | undefined {
+    return this.connections.get(serverName);
+  }
+
+  /**
+   * Get server capabilities
+   */
+  getServerCapabilities(serverName: string): any {
+    const connection = this.connections.get(serverName);
+    if (!connection?.client) {
+      return undefined;
+    }
+    return connection.client.getServerCapabilities();
   }
 }
