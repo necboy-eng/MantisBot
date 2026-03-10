@@ -2,6 +2,9 @@ import { useState } from 'react';
 import { RotateCcw, Trash2, Copy, Check } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import remarkMath from 'remark-math';
+import rehypeKatex from 'rehype-katex';
+import 'katex/dist/katex.min.css';
 import { useTranslation } from 'react-i18next';
 import { SkillChainDisplay } from './SkillChainDisplay';
 import { AgentTimeline } from './AgentTimeline';
@@ -512,7 +515,8 @@ export function MessageBubble({
               {msg.content.trim() || msg.thinking || (msg.toolStatus && msg.toolStatus.length > 0) ? (
                 <div className="prose prose-sm dark:prose-invert max-w-none break-words [&_pre]:bg-gray-900 [&_pre]:p-3 [&_pre]:rounded-xl [&_pre]:overflow-x-auto [&_code]:text-sm [&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1 [&_li]:my-0.5 [&_table]:block [&_table]:w-full [&_table]:overflow-x-auto [&_th]:whitespace-nowrap [&_td]:whitespace-nowrap">
                   <ReactMarkdown
-                    remarkPlugins={[remarkGfm]}
+                    remarkPlugins={[remarkGfm, remarkMath]}
+                    rehypePlugins={[rehypeKatex]}
                     components={{
                       code({ className, children, ...props }) {
                         const match = /language-(\w+)/.exec(className || '');
