@@ -113,7 +113,7 @@ jobs:
 
       - name: Create Source Archive
         run: |
-          tar -czf mantisbot-source.tar.gz --exclude='.git' --exclude='node_modules' --exclude='dist' --exclude='web-ui' --exclude='.worktrees' --exclude='*.log' .
+          tar -czf mantisbot-source.tar.gz --exclude='.git' --exclude='node_modules' --exclude='dist' --exclude='web-ui' --exclude='.worktrees' --exclude='*.log' --exclude='mantisbot-source.tar.gz' .
 
       - name: Create Web UI Archive
         run: |
