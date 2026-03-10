@@ -32,6 +32,9 @@ export PLAYWRIGHT_BROWSERS_PATH=/app/.playwright-python
 # 检查基础包是否已安装，如果没有则安装
 if ! python3 -c "import requests" 2>/dev/null; then
   echo "[Entrypoint] Installing Python packages for skills..."
+  # 写入初始化标记文件，Node.js 启动后读取此文件以决定 /health 的返回状态
+  mkdir -p /app/data
+  echo "installing_python_packages" > /app/data/.init-status
 
   # crawl4ai（网页爬取）
   pip install --no-cache-dir \
@@ -78,6 +81,8 @@ if ! python3 -c "import requests" 2>/dev/null; then
     mcp
 
   echo "[Entrypoint] Python packages installed successfully!"
+  # 删除初始化标记文件，通知 Node.js 初始化已完成
+  rm -f /app/data/.init-status
 fi
 
 # 启动应用

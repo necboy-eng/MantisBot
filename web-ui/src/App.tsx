@@ -307,7 +307,7 @@ function App() {
   });
 
   // 后端连接状态
-  const [backendStatus, setBackendStatus] = useState<'checking' | 'connected' | 'reconnecting'>('checking');
+  const [backendStatus, setBackendStatus] = useState<'checking' | 'initializing' | 'connected' | 'reconnecting'>('checking');
   const [retryCount, setRetryCount] = useState(0);
   const [healthError, setHealthError] = useState('');
   const [showHealthDetail, setShowHealthDetail] = useState(false);
@@ -425,6 +425,17 @@ function App() {
         if (!isMounted) return;
 
         if (response.ok) {
+          const data = await response.json();
+          // 后端正在初始化（首次启动安装依赖包）
+          if (data.status === 'initializing') {
+            hasConnected = false; // 尚未真正就绪
+            failureCount = 0;
+            setBackendStatus('initializing');
+            setHealthError(data.message || '正在安装 Python 依赖包，首次启动需要几分钟...');
+            // 5 秒后继续轮询
+            retryTimer = setTimeout(checkBackendHealth, 5000);
+            return;
+          }
           hasConnected = true;
           failureCount = 0;
           setBackendStatus('connected');
@@ -457,7 +468,7 @@ function App() {
 
     // 定期健康检查（每 30 秒）——使用 ref 避免 stale closure 问题
     const healthCheckInterval = setInterval(() => {
-      if (backendStatusRef.current === 'connected') {
+      if (backendStatusRef.current === 'connected' || backendStatusRef.current === 'initializing') {
         checkBackendHealth();
       }
     }, 10000);
@@ -2192,6 +2203,18 @@ function App() {
         </div>
       )}
 
+      {backendStatus === 'initializing' && (
+        <div className="fixed top-0 left-0 right-0 z-50 bg-indigo-500 text-white text-center py-2 text-sm">
+          <div className="flex items-center justify-center gap-2">
+            <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+            </svg>
+            后端初始化中：{healthError}
+          </div>
+        </div>
+      )}
+
       {backendStatus === 'reconnecting' && (
         <div className="fixed top-0 left-0 right-0 z-50 bg-amber-500 text-white text-center py-2 text-sm">
           <div className="flex items-center justify-center gap-2">
@@ -2238,6 +2261,7 @@ function App() {
               onClick={() => backendStatus === 'reconnecting' && setShowHealthDetail(v => !v)}
               title={
                 backendStatus === 'checking' ? '检查中...' :
+                backendStatus === 'initializing' ? '后端初始化中...' :
                 backendStatus === 'connected' ? '后端在线' :
                 `后端离线${healthError ? '：' + healthError : ''}`
               }
@@ -2252,6 +2276,15 @@ function App() {
                   <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
                   <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
                 </svg>
+              )}
+              {backendStatus === 'initializing' && (
+                <>
+                  <svg className="w-3 h-3 animate-spin text-indigo-400" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                  </svg>
+                  <span className="text-indigo-500 dark:text-indigo-400">初始化中</span>
+                </>
               )}
               {backendStatus === 'connected' && (
                 <span className="w-2 h-2 rounded-full bg-green-500" />

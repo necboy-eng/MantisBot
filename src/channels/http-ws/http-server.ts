@@ -176,7 +176,21 @@ export async function createHTTPServer(options: HTTPServerOptions) {
   app.use(express.json({ limit: '100mb' })); // 增加请求体大小限制以支持大文件上传
 
   // Health check
+  // 检测初始化标记文件（由 docker-entrypoint.sh 在 pip install 期间写入）
+  // 存在时返回 'initializing'，前端据此显示"后端初始化中"而非"已连接"
+  const INIT_STATUS_FILE = path.join(config.workspace || './data', '.init-status');
   app.get('/health', (_, res) => {
+    const isInitializing = fs.existsSync(INIT_STATUS_FILE);
+    if (isInitializing) {
+      let initMessage = '正在安装 Python 依赖包，首次启动需要几分钟...';
+      try {
+        const content = fs.readFileSync(INIT_STATUS_FILE, 'utf8').trim();
+        if (content) initMessage = content;
+      } catch {
+        // ignore
+      }
+      return res.json({ status: 'initializing', message: initMessage, timestamp: Date.now() });
+    }
     res.json({ status: 'ok', timestamp: Date.now() });
   });
 

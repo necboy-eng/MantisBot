@@ -42,9 +42,9 @@ services:
     image: onlyoffice-local:latest
     ports:
       - "8081:80"
-    volumes:
-      # 挂载自定义 CORS 配置
-      - ./config/onlyoffice/nginx.cors.conf:/etc/nginx/nginx.conf:ro
+    configs:
+      - source: nginx_cors_conf
+        target: /etc/nginx/nginx.conf
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost/"]
@@ -56,3 +56,67 @@ services:
 volumes:
   python-venv:
     name: mantis-python-venv
+
+# 内嵌配置文件（无需依赖外部文件）
+configs:
+  nginx_cors_conf:
+    content: |
+      user  nginx;
+      worker_processes  auto;
+
+      error_log  /var/log/nginx/error.log warn;
+      pid        /var/run/nginx.pid;
+
+
+      events {
+          worker_connections  1024;
+      }
+
+
+      http {
+          include       /etc/nginx/mime.types;
+          default_type  application/octet-stream;
+
+          log_format  main  '$$remote_addr - $$remote_user [$$time_local] "$$request" '
+                            '$$status $$body_bytes_sent "$$http_referer" '
+                            '"$$http_user_agent" "$$http_x_forwarded_for"';
+
+          access_log  /var/log/nginx/access.log  main;
+
+          sendfile        on;
+          keepalive_timeout  65;
+          gzip_static on;
+          gzip  on;
+          gzip_types text/plain text/css application/json application/javascript text/xml application/xml+rss text/javascript application/wasm application/octet-stream;
+
+          # 默认 server 配置
+          server {
+              listen 80;
+              server_name localhost;
+
+              root /usr/share/nginx/html;
+              index index.html;
+
+              # 允许 iframe 嵌入 - 使用 CSP frame-ancestors 替代过时的 X-Frame-Options
+              # 移除 X-Frame-Options 限制，允许被任意页面嵌入
+              # 如果需要限制来源，可以启用：
+              # add_header Content-Security-Policy "frame-ancestors 'self' http://localhost:* http://127.0.0.1:*" always;
+
+              location / {
+                  try_files $$uri $$uri/ /index.html;
+              }
+
+              # 静态资源缓存
+              location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$ {
+                  add_header Cache-Control "public, max-age=31536000";
+              }
+
+              # WASM 文件 - 禁用 gzip 以支持浏览器流式编译
+              # 流式编译需要原始文件，gzip 会阻止 streaming compilation
+              location ~* \.(wasm)$ {
+                  gzip off;
+                  add_header Cache-Control "public, max-age=31536000";
+                  add_header Content-Type "application/wasm" always;
+              }
+          }
+      }
