@@ -6,7 +6,8 @@ export interface FileAttachment {
   name: string;
   size: number;
   mimeType: string;
-  url: string;  // 相对路径，如 /api/files/xxx
+  url?: string;   // 相对路径，如 /api/files/xxx（可选，纯 Buffer 附件无 URL）
+  data?: Buffer;  // 原始文件数据（可选）
 }
 
 // Session types

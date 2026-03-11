@@ -811,7 +811,7 @@ export async function createHTTPServer(options: HTTPServerOptions) {
 
         for (const att of imageAttachments) {
           // URL 格式: /api/files/{storedName}
-          const storedName = path.basename(att.url);
+          const storedName = path.basename(att.url || '');
           const absPath = fileStorage.getFilePath(storedName);
 
           if (!absPath) {

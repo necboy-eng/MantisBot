@@ -396,7 +396,7 @@ export async function sendFeishuFile(
 
   // 从 FileStorage 按 url 读取文件内容
   // url 格式：/api/files/{uuid}.ext → storedName = {uuid}.ext
-  const storedName = path.basename(attachment.url);
+  const storedName = path.basename(attachment.url || '');
   const fileStorage = getFileStorage();
   const fileData = fileStorage.readFile(storedName);
 

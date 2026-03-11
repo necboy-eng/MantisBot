@@ -1,13 +1,8 @@
 // src/channels/channel.interface.ts
 
-export interface FileAttachment {
-  id: string;
-  name: string;
-  mimeType: string;
-  size: number;
-  url?: string;
-  data?: Buffer;
-}
+// 复用 types.ts 中统一的 FileAttachment 定义，消除重复
+import type { FileAttachment } from '../types';
+export type { FileAttachment };
 
 export interface ChannelMessage {
   id: string;
