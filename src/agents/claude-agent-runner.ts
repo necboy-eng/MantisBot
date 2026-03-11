@@ -652,6 +652,13 @@ export class ClaudeAgentRunner extends EventEmitter {
       systemPrompt = `${systemPrompt}\n\n${dirContext}`;
     }
 
+    // 注入文件发送工具说明（告知模型有 send_file 能力，避免模型误以为无法发文件）
+    systemPrompt = `${systemPrompt}\n\n## 文件发送能力
+你拥有 \`send_file\` 工具，可以将本地文件作为附件直接发送给用户。当用户要求"发送文件"、"把文件给我"、"分享文件"时，**必须直接调用 \`send_file\` 工具**，不要询问用户如何发送，也不要说自己没有发送文件的能力。
+- 支持发送单个或多个文件
+- 文件路径支持 ~ 表示用户目录
+- 调用成功后告知用户文件已发送`;
+
     // 注入记忆工具使用指引 + 记忆使用约束
     systemPrompt = `${systemPrompt}\n\n## 记忆使用规范
 你拥有用户的历史记忆信息，但请遵守以下规则：
@@ -916,18 +923,20 @@ export class ClaudeAgentRunner extends EventEmitter {
           }
         ],
       },
-      // 只有在有 MCP 工具时才添加 mcpServers
-      ...(mcpServer ? { mcpServers: { 'mantis-tools': mcpServer } } : {}),
-      // 收集插件的 MCP 服务器配置（SDK 格式）
-      // 将所有启用插件的 .mcp.json 配置合并到 mcpServers
+      // 合并 mantis-tools 内置 MCP 服务器与插件 MCP 服务器
+      // 注意：必须在同一个 mcpServers 对象内合并，不能分开展开——
+      // 后者的 ...{ mcpServers: X } 会完全覆盖前者的 ...{ mcpServers: Y }
       ...(() => {
         const pluginLoader = getGlobalPluginLoader();
-        if (!pluginLoader) return {};
-        const pluginMcpServers = pluginLoader.getAllMcpServers();
+        const pluginMcpServers = pluginLoader ? pluginLoader.getAllMcpServers() : {};
         if (Object.keys(pluginMcpServers).length > 0) {
           console.log('[ClaudeAgentRunner] Adding plugin MCP servers:', Object.keys(pluginMcpServers));
         }
-        return { mcpServers: pluginMcpServers };
+        const allMcpServers = {
+          ...(mcpServer ? { 'mantis-tools': mcpServer } : {}),
+          ...pluginMcpServers,
+        };
+        return Object.keys(allMcpServers).length > 0 ? { mcpServers: allMcpServers } : {};
       })(),
       // 收集插件的 SDK 配置（用于加载插件 commands/skills）
       // 注意：SDK 期望插件目录包含 .claude-plugin/plugin.json
@@ -1040,8 +1049,29 @@ export class ClaudeAgentRunner extends EventEmitter {
       console.log('[ClaudeAgentRunner] Calling query API...');
 
       // 构建 query 参数
+      // 如果 dispatch 注入了多模态内容（图片 + 文字），使用数组格式
+      // Claude Agent SDK 支持 prompt 为 ContentBlock[] 数组，会走 streamInput 直接传入
+      const promptValue: string | unknown[] = (this as any)._multimodalContent ?? userMessage;
+      // 用完即清，避免下次调用复用
+      if ((this as any)._multimodalContent) {
+        const blocks = (this as any)._multimodalContent;
+        console.log('[ClaudeAgentRunner] Using multimodal content, blocks:', blocks.length);
+        // 打印每个 block 的类型和大小
+        blocks.forEach((b: any, i: number) => {
+          if (b.type === 'image') {
+            const dataLen = b.source?.data?.length || 0;
+            console.log(`  [${i}] image: ${b.source?.media_type}, data length: ${dataLen}`);
+          } else if (b.type === 'text') {
+            console.log(`  [${i}] text: ${b.text?.substring(0, 50)}...`);
+          } else {
+            console.log(`  [${i}] ${b.type}`);
+          }
+        });
+        delete (this as any)._multimodalContent;
+      }
+
       const queryParams: Record<string, unknown> = {
-        prompt: userMessage,
+        prompt: promptValue,
         options,
       };
 

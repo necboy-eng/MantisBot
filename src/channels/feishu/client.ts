@@ -146,7 +146,7 @@ export function isFeishuEnabled(): boolean {
  * 参考 LobsterAI 实现，增加预检测和域名配置
  */
 export async function startFeishuWSClient(
-  onMessage: (message: string, chatId: string, userId: string, messageId: string) => Promise<void>
+  onMessage: (message: string, chatId: string, userId: string, messageId: string, attachments?: FileAttachment[]) => Promise<void>
 ): Promise<void> {
   const config = getConfig();
   // 从新架构的 config.channels.feishu 读取配置
@@ -234,24 +234,57 @@ export async function startFeishuWSClient(
         }
 
         const chatId = message.chat_id;
-        // sender_id 结构可能因应用类型不同而有差异
-        const userId = message.sender_id?.user_id || message.sender_id?.union_id || '';
+        // sender_id 在 data.sender.sender_id（飞书 SDK 2.0 Schema 结构）
+        const senderId = data.sender?.sender_id;
+        const userId = senderId?.user_id || senderId?.union_id || senderId?.open_id || '';
 
         // 解析消息内容，并清除 @_user_X 占位符
         let content = '';
-        try {
-          content = JSON.parse(message.content || '{}').text || '';
-        } catch {
-          content = message.content || '';
-        }
-        // 移除飞书 @占位符（如 "@_user_1 "），保留实际文字
-        content = content.replace(/@_user_\d+\s*/g, '').trim();
+        // 飞书 SDK 使用 message_type 字段（不是 msg_type）
+        const msgType = message.message_type || message.msg_type;
 
-        console.log(`[Feishu] Received message from ${userId}, chatId: ${chatId}, messageId: ${messageId}, content: ${content}`);
+        // 根据消息类型处理
+        if (msgType === 'text' || msgType === 'post') {
+          try {
+            content = JSON.parse(message.content || '{}').text || '';
+          } catch {
+            content = message.content || '';
+          }
+          // 移除飞书 @占位符（如 "@_user_1 "），保留实际文字
+          content = content.replace(/@_user_\d+\s*/g, '').trim();
+        } else if (msgType === 'image') {
+          content = '[图片]';
+        } else if (msgType === 'file') {
+          const fileContent = JSON.parse(message.content || '{}');
+          content = `[文件] ${fileContent.file_name || '未知文件'}`;
+        } else if (msgType === 'media') {
+          const mediaContent = JSON.parse(message.content || '{}');
+          content = `[媒体] ${mediaContent.file_name || '未知媒体'}`;
+        } else if (msgType === 'audio') {
+          const audioContent = JSON.parse(message.content || '{}');
+          content = `[音频] ${audioContent.file_name || '未知音频'}`;
+        } else {
+          content = `[${msgType}]`;
+        }
+
+        console.log(`[Feishu] Received message from ${userId}, chatId: ${chatId}, messageId: ${messageId}, msgType: ${msgType}, content: ${content}`);
+
+        // 处理消息中的媒体附件（图片、文件等）
+        let attachments: FileAttachment[] = [];
+        if (['image', 'file', 'media', 'audio', 'post'].includes(msgType)) {
+          try {
+            attachments = await processFeishuMessageMedia(message);
+            if (attachments.length > 0) {
+              console.log(`[Feishu] Processed ${attachments.length} attachment(s) for message ${messageId}`);
+            }
+          } catch (err) {
+            console.error(`[Feishu] Failed to process message media:`, err);
+          }
+        }
 
         // 调用传入的回调函数处理消息
         if (onMessage) {
-          await onMessage(content, chatId, userId, messageId);
+          await onMessage(content, chatId, userId, messageId, attachments.length > 0 ? attachments : undefined);
         }
       },
       // 添加消息已读事件处理器，消除警告
@@ -462,4 +495,228 @@ export async function getFeishuClientForTools(userId?: string): Promise<any> {
   // 动态导入并使用工具模块的客户端管理器
   const feishuModule = await import('../../agents/tools/feishu/client.js');
   return feishuModule.getFeishuClient(userId);
+}
+
+// ============================================================
+// 媒体下载函数（参考 OpenClaw 实现）
+// ============================================================
+
+/**
+ * 从飞书 SDK 响应中读取 Buffer
+ */
+async function readFeishuResponseBuffer(response: any, errorPrefix: string): Promise<Buffer> {
+  if (Buffer.isBuffer(response)) {
+    return response;
+  }
+  if (response instanceof ArrayBuffer) {
+    return Buffer.from(response);
+  }
+  if (response.code !== undefined && response.code !== 0) {
+    throw new Error(`${errorPrefix}: ${response.msg || `code ${response.code}`}`);
+  }
+  if (response.data && Buffer.isBuffer(response.data)) {
+    return response.data;
+  }
+  if (response.data instanceof ArrayBuffer) {
+    return Buffer.from(response.data);
+  }
+  if (typeof response.getReadableStream === 'function') {
+    const stream = response.getReadableStream();
+    const chunks: Buffer[] = [];
+    for await (const chunk of stream) {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    }
+    return Buffer.concat(chunks);
+  }
+  if (typeof response.writeFile === 'function') {
+    // 临时文件方式
+    const tmpPath = `/tmp/feishu-download-${Date.now()}`;
+    await response.writeFile(tmpPath);
+    const buffer = await fs.promises.readFile(tmpPath);
+    await fs.promises.unlink(tmpPath).catch(() => {});
+    return buffer;
+  }
+  if (typeof response[Symbol.asyncIterator] === 'function') {
+    const chunks: Buffer[] = [];
+    for await (const chunk of response) {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    }
+    return Buffer.concat(chunks);
+  }
+
+  throw new Error(`${errorPrefix}: unexpected response format`);
+}
+
+/**
+ * 下载飞书图片
+ * @param imageKey 图片 key
+ * @returns 图片 Buffer
+ */
+export async function downloadFeishuImage(imageKey: string): Promise<Buffer> {
+  const feishu = getFeishuClient();
+  if (!feishu) {
+    throw new Error('Feishu is not enabled');
+  }
+
+  console.log(`[Feishu] Downloading image: ${imageKey}`);
+  const response = await feishu.im.image.get({
+    path: { image_key: imageKey },
+  });
+
+  const buffer = await readFeishuResponseBuffer(response, 'Feishu image download failed');
+  console.log(`[Feishu] Image downloaded, size: ${buffer.length} bytes`);
+  return buffer;
+}
+
+/**
+ * 下载飞书消息资源（文件/媒体）
+ * @param messageId 消息 ID
+ * @param fileKey 文件 key
+ * @param type 资源类型
+ * @returns 文件 Buffer
+ */
+export async function downloadFeishuMessageResource(
+  messageId: string,
+  fileKey: string,
+  type: 'image' | 'file'
+): Promise<Buffer> {
+  const feishu = getFeishuClient();
+  if (!feishu) {
+    throw new Error('Feishu is not enabled');
+  }
+
+  console.log(`[Feishu] Downloading message resource: ${fileKey} (type: ${type})`);
+  const response = await feishu.im.messageResource.get({
+    path: { message_id: messageId, file_key: fileKey },
+    params: { type },
+  });
+
+  const buffer = await readFeishuResponseBuffer(response, 'Feishu message resource download failed');
+  console.log(`[Feishu] Message resource downloaded, size: ${buffer.length} bytes`);
+  return buffer;
+}
+
+/**
+ * 处理飞书消息中的媒体附件
+ * @param message 飞书消息对象
+ * @returns FileAttachment 数组
+ */
+export async function processFeishuMessageMedia(message: any): Promise<FileAttachment[]> {
+  const attachments: FileAttachment[] = [];
+  // 兼容 message_type（飞书 SDK 2.0）和 msg_type（旧版/直接字段）
+  const msgType = message.message_type || message.msg_type;
+  const messageId = message.message_id;
+
+  if (!messageId) {
+    return attachments;
+  }
+
+  try {
+    if (msgType === 'image') {
+      // 图片消息：必须使用消息资源接口下载（用户发来的图片），
+      // 而非 im.image.get（只能下载机器人自己上传的图片）
+      const content = JSON.parse(message.content || '{}');
+      const imageKey = content.image_key;
+      if (imageKey) {
+        const buffer = await downloadFeishuMessageResource(messageId, imageKey, 'image');
+        const fileStorage = getFileStorage();
+        const attachment = fileStorage.saveFile(`feishu-image-${imageKey}.jpg`, buffer, 'image/jpeg');
+        attachments.push({
+          id: attachment.id,
+          name: `feishu-image-${imageKey}.jpg`,
+          mimeType: 'image/jpeg',
+          size: buffer.length,
+          url: attachment.url,
+        });
+        console.log(`[Feishu] Saved image attachment: ${attachment.id}`);
+      }
+    } else if (msgType === 'file' || msgType === 'media' || msgType === 'audio') {
+      // 文件/媒体消息
+      const content = JSON.parse(message.content || '{}');
+      const fileKey = content.file_key;
+      const fileName = content.file_name || `feishu-file-${fileKey}`;
+
+      if (fileKey) {
+        const resourceType = msgType === 'file' ? 'file' : 'image';
+        const buffer = await downloadFeishuMessageResource(messageId, fileKey, resourceType);
+        const fileStorage = getFileStorage();
+
+        // 根据文件扩展名确定 MIME 类型
+        const ext = path.extname(fileName).toLowerCase();
+        let mimeType = 'application/octet-stream';
+        if (['.jpg', '.jpeg'].includes(ext)) mimeType = 'image/jpeg';
+        else if (ext === '.png') mimeType = 'image/png';
+        else if (ext === '.gif') mimeType = 'image/gif';
+        else if (ext === '.webp') mimeType = 'image/webp';
+        else if (ext === '.pdf') mimeType = 'application/pdf';
+        else if (['.doc', '.docx'].includes(ext)) mimeType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+        else if (['.xls', '.xlsx'].includes(ext)) mimeType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+        else if (['.ppt', '.pptx'].includes(ext)) mimeType = 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
+        else if (['.mp4', '.mov', '.avi'].includes(ext)) mimeType = 'video/mp4';
+        else if (['.mp3', '.wav', '.ogg', '.opus'].includes(ext)) mimeType = 'audio/ogg';
+
+        const attachment = fileStorage.saveFile(fileName, buffer, mimeType);
+        attachments.push({
+          id: attachment.id,
+          name: fileName,
+          mimeType,
+          size: buffer.length,
+          url: attachment.url,
+        });
+        console.log(`[Feishu] Saved file attachment: ${attachment.id} (${fileName})`);
+      }
+    } else if (msgType === 'post') {
+      // 富文本消息：可能包含嵌入图片
+      const content = JSON.parse(message.content || '{}');
+      // 解析富文本中的图片（简化版，只提取图片 key）
+      const imageKeys = extractImageKeysFromPost(content);
+      for (const imageKey of imageKeys) {
+        try {
+          const buffer = await downloadFeishuMessageResource(messageId, imageKey, 'image');
+          const fileStorage = getFileStorage();
+          const attachment = fileStorage.saveFile(`feishu-post-img-${imageKey}.jpg`, buffer, 'image/jpeg');
+          attachments.push({
+            id: attachment.id,
+            name: `feishu-post-img-${imageKey}.jpg`,
+            mimeType: 'image/jpeg',
+            size: buffer.length,
+            url: attachment.url,
+          });
+          console.log(`[Feishu] Saved post embedded image: ${attachment.id}`);
+        } catch (err) {
+          console.error(`[Feishu] Failed to download post image ${imageKey}:`, err);
+        }
+      }
+    }
+  } catch (error) {
+    console.error('[Feishu] Failed to process message media:', error);
+  }
+
+  return attachments;
+}
+
+/**
+ * 从飞书富文本内容中提取图片 key
+ */
+function extractImageKeysFromPost(content: any): string[] {
+  const keys: string[] = [];
+
+  function traverse(obj: any) {
+    if (!obj || typeof obj !== 'object') return;
+
+    // 图片对象通常包含 image_key
+    if (obj.image_key) {
+      keys.push(obj.image_key);
+    }
+
+    // 递归遍历
+    if (Array.isArray(obj)) {
+      obj.forEach(traverse);
+    } else {
+      Object.values(obj).forEach(traverse);
+    }
+  }
+
+  traverse(content);
+  return keys;
 }

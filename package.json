@@ -1,11 +1,12 @@
 {
   "name": "mantis-bot",
-  "version": "1.2.4",
+  "version": "1.2.5",
   "type": "module",
   "scripts": {
     "predev": "node scripts/kill-port.cjs 8118",
     "postinstall": "node scripts/postinstall.cjs",
     "dev": "concurrently --names \"后端,前端\" --prefix-colors \"cyan.bold,magenta.bold\" --kill-others-on-fail \"node --watch --import tsx/esm src/entry.ts\" \"npm --prefix web-ui run dev\"",
+    "dev:log": "FORCE_COLOR=1 npm run dev | tee dev.log",
     "dev:backend": "node --watch --import tsx/esm src/entry.ts",
     "build": "tsc",
     "build:ui": "npm --prefix web-ui run build",

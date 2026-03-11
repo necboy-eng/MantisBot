@@ -175,7 +175,7 @@ export class AutoReply {
    */
   async *handleMessageStream(
     content: string,
-    context: { platform: string; chatId: string; userId: string }
+    context: { platform: string; chatId: string; userId: string; attachments?: import('../types.js').FileAttachment[] }
   ): StreamGenerator {
     // Check for plugin commands first
     if (content.startsWith('/') && content.includes(':')) {
@@ -209,6 +209,7 @@ export class AutoReply {
       userId: context.userId,
       platform: context.platform,
       timestamp: Date.now(),
+      attachments: context.attachments,
     };
 
     // Build ChannelContext

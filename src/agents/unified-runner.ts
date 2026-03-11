@@ -57,12 +57,15 @@ export class UnifiedAgentRunner extends EventEmitter implements IAgentRunner {
   private claudeRunner: ClaudeAgentRunner;
   private options: AgentRunnerOptions;
   private abortController: AbortController | null = null;
+  /** 暴露 toolRegistry 供外部访问（如 dispatch 创建 vision runner） */
+  readonly toolRegistry: ToolRegistry;
 
   constructor(
     toolRegistry: ToolRegistry,
     options: AgentRunnerOptions = {}
   ) {
     super();
+    this.toolRegistry = toolRegistry;
     this.options = options;
 
     // 确定默认模型
@@ -147,6 +150,12 @@ export class UnifiedAgentRunner extends EventEmitter implements IAgentRunner {
   ): AsyncGenerator<StreamChunk> {
     this.abortController = abortSignal ? null : new AbortController();
     const signal = abortSignal || this.abortController?.signal;
+
+    // 将 dispatch 注入的多模态内容（图片+文字）透传给内部 claudeRunner
+    if ((this as any)._multimodalContent) {
+      (this.claudeRunner as any)._multimodalContent = (this as any)._multimodalContent;
+      delete (this as any)._multimodalContent;
+    }
 
     if (signal) {
       yield* this.claudeRunner.streamRun(userMessage, conversationHistory, signal);

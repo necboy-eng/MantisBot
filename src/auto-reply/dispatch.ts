@@ -1,5 +1,7 @@
 // src/auto-reply/dispatch.ts
 
+import path from 'path';
+import fs from 'fs';
 import type { ChannelMessage, ChannelContext } from '../channels/channel.interface.js';
 import type { FileAttachment } from '../types.js';
 import type { IAgentRunner } from '../agents/unified-runner.js';
@@ -11,6 +13,33 @@ import { getConfig } from '../config/loader.js';
 import { detectTeamFromMessage, findTeamByCommand } from '../agents/agent-teams.js';
 import type { AgentTeam } from '../config/schema.js';
 import { getHooksLoader } from '../hooks/loader.js';
+import { UnifiedAgentRunner } from '../agents/unified-runner.js';
+import { getFileStorage } from '../files/index.js';
+import { workDirManager } from '../workdir/manager.js';
+import { registerPendingImages, VISION_INJECT_ENV_KEY, type ImageBlock } from '../agents/openai-proxy.js';
+
+// 图片最大允许大小（2MB）
+const MAX_IMAGE_SIZE = 2 * 1024 * 1024;
+
+/**
+ * 检测模型是否支持视觉
+ * 支持两种配置格式：
+ * - 数组：capabilities: ['vision']
+ * - 对象：capabilities: { vision: true }
+ * - 简写：vision: true 或 supportsVision: true
+ */
+function modelSupportsVision(modelConfig: any): boolean {
+  // 数组格式：capabilities: ['vision']
+  if (Array.isArray(modelConfig?.capabilities) && modelConfig.capabilities.includes('vision')) {
+    return true;
+  }
+  // 对象格式：capabilities: { vision: true }
+  if (modelConfig?.capabilities?.vision === true) {
+    return true;
+  }
+  // 简写格式
+  return modelConfig?.vision === true || modelConfig?.supportsVision === true;
+}
 
 export interface DispatchResult {
   response: string;
@@ -289,6 +318,108 @@ ${content}
         prompt = content;
       }
 
+      // ── 视觉路由：图片附件检测与模型切换 ─────────────────────────────────
+      // 检查是否有图片附件
+      const incomingAttachments = message.attachments || [];
+      const hasImageAttachment = incomingAttachments.some(
+        (a) => a.mimeType?.startsWith('image/')
+      );
+
+      // 是否需要临时视觉 runner（图片存在且当前模型不支持视觉）
+      let visionRunner: UnifiedAgentRunner | null = null;
+      let visionSwitchNotice = '';
+      let effectiveRunner = this.agentRunner;
+
+      if (hasImageAttachment) {
+        // 获取当前模型名称
+        const currentModelName = (this.agentRunner as any).options?.model || config.models[0]?.name;
+        const currentModelConfig = (config.models as any[]).find((m: any) => m.name === currentModelName);
+        const currentSupportsVision = currentModelConfig ? modelSupportsVision(currentModelConfig) : false;
+
+        if (!currentSupportsVision) {
+          // 查找第一个支持视觉的模型
+          const visionModel = (config.models as any[]).find(
+            (m: any) => m.enabled !== false && modelSupportsVision(m)
+          );
+
+          if (visionModel) {
+            console.log(`[DispatchStream] Vision routing: switching from ${currentModelName} to ${visionModel.name} for image analysis`);
+            const cwd = workDirManager.getCurrentWorkDir();
+            visionRunner = new UnifiedAgentRunner((this.agentRunner as any).toolRegistry, {
+              model: visionModel.name,
+              maxIterations: 0,
+              approvalMode: session.approvalMode || 'dangerous',
+              cwd,
+            });
+            visionSwitchNotice = `🔍 已自动切换到 **${visionModel.name}** 进行图像分析`;
+            effectiveRunner = visionRunner;
+          } else {
+            // 没有可用视觉模型，返回友好提示
+            console.warn('[DispatchStream] Vision routing: no vision-capable model found');
+            yield { type: 'text', content: '⚠️ 当前没有支持图像识别的模型。请在配置中为某个模型开启视觉理解能力后重试。' };
+            yield { type: 'done' };
+            return;
+          }
+        }
+
+        // 将图片注入到消息中
+        const imageAttachments = incomingAttachments.filter(
+          (a) => a.mimeType?.startsWith('image/')
+        );
+        const fileStorage = getFileStorage();
+        const imageBlocks: ImageBlock[] = [];
+
+        for (const att of imageAttachments) {
+          // URL 格式: /api/files/{storedName}
+          const storedName = path.basename(att.url || '');
+          const absPath = fileStorage.getFilePath(storedName);
+
+          if (!absPath) {
+            console.warn(`[DispatchStream] Image path not resolved: ${storedName}`);
+            continue;
+          }
+
+          try {
+            const stat = fs.statSync(absPath);
+            if (stat.size > MAX_IMAGE_SIZE) {
+              console.warn(`[DispatchStream] Image too large (${Math.round(stat.size / 1024)}KB): ${storedName}`);
+              continue;
+            }
+
+            const buffer = fs.readFileSync(absPath);
+            const base64 = buffer.toString('base64');
+            const mimeType = att.mimeType || 'image/jpeg';
+
+            imageBlocks.push({
+              type: 'image',
+              source: {
+                type: 'base64',
+                media_type: mimeType,
+                data: base64,
+              },
+            });
+            console.log(`[DispatchStream] Image loaded: ${storedName} (${Math.round(stat.size / 1024)}KB)`);
+          } catch (err) {
+            console.error(`[DispatchStream] Failed to read image ${storedName}:`, err);
+          }
+        }
+
+        // 如果成功加载了图片，使用 registerPendingImages 机制注入
+        if (imageBlocks.length > 0) {
+          // 注册图片，获取 injectId
+          const injectId = registerPendingImages(imageBlocks);
+
+          // 设置环境变量，Proxy 会读取并注入图片到最后一条 user message
+          process.env[VISION_INJECT_ENV_KEY] = injectId;
+          console.log(`[DispatchStream] Registered ${imageBlocks.length} image(s) with injectId: ${injectId}`);
+
+          // 发送视觉模型切换通知
+          if (visionSwitchNotice) {
+            yield { type: 'text', content: visionSwitchNotice + '\n\n' };
+          }
+        }
+      }
+
       // Add user message to session
       this.sessionManager.addMessage(sessionId, {
         role: 'user',
@@ -297,6 +428,7 @@ ${content}
           platform: message.platform,
           chatId: message.chatId,
           userId: message.userId,
+          attachments: message.attachments?.map(a => ({ name: a.name, mimeType: a.mimeType })),
         },
       });
 
@@ -304,7 +436,7 @@ ${content}
       // 将问题格式化为文本输出，并自动 deny 让 Agent 自行决策
       const isNonWebPlatform = message.platform !== 'http' && message.platform !== 'web';
       let askUserQuestionHandler: ((req: any) => void) | undefined;
-      if (isNonWebPlatform && typeof (this.agentRunner as any).on === 'function') {
+      if (isNonWebPlatform && typeof (effectiveRunner as any).on === 'function') {
         askUserQuestionHandler = (req: any) => {
           if (req.toolName === 'AskUserQuestion' || req.toolName === 'askuserquestion') {
             // 格式化问题选项，记录日志供调试
@@ -318,10 +450,10 @@ ${content}
             }
             // 自动 deny，告知 Agent 当前渠道不支持交互式问答，请自行判断
             const denyMsg = '当前渠道（非 Web 环境）不支持交互式问答弹窗。请根据上下文直接做出最合理的判断并继续执行，无需等待用户选择。';
-            (this.agentRunner as any).respondToPermission?.(req.requestId, false, undefined, denyMsg);
+            (effectiveRunner as any).respondToPermission?.(req.requestId, false, undefined, denyMsg);
           }
         };
-        (this.agentRunner as any).on('permissionRequest', askUserQuestionHandler);
+        (effectiveRunner as any).on('permissionRequest', askUserQuestionHandler);
       }
 
       // 流式运行
@@ -329,7 +461,7 @@ ${content}
       const attachments: FileAttachment[] = [];
 
       try {
-        for await (const chunk of this.agentRunner.streamRun(prompt, history)) {
+        for await (const chunk of effectiveRunner.streamRun(prompt, history)) {
           if (chunk.type === 'text' && chunk.content) {
             fullResponse += chunk.content;
             yield { type: 'text', content: chunk.content };
@@ -342,8 +474,13 @@ ${content}
         }
       } finally {
         // 清理事件监听器，避免内存泄漏
-        if (askUserQuestionHandler && typeof (this.agentRunner as any).off === 'function') {
-          (this.agentRunner as any).off('permissionRequest', askUserQuestionHandler);
+        if (askUserQuestionHandler && typeof (effectiveRunner as any).off === 'function') {
+          (effectiveRunner as any).off('permissionRequest', askUserQuestionHandler);
+        }
+        // 临时视觉 runner 用完即释放
+        if (visionRunner) {
+          visionRunner.dispose?.();
+          console.log('[DispatchStream] Vision runner disposed');
         }
       }
 

@@ -266,7 +266,8 @@ export async function main(): Promise<void> {
           const generator = autoReply.handleMessageStream(message.content, {
             platform: message.platform,
             chatId: message.chatId,
-            userId: message.userId || ''
+            userId: message.userId || '',
+            attachments: message.attachments,
           });
 
           // 调用 channel 的流式发送方法

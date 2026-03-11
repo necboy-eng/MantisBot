@@ -68,6 +68,30 @@ export const VISION_INJECT_ENV_KEY = 'VISION_INJECT_ID' as const;
 
 const pendingImages = new Map<string, ImageBlock[]>();
 
+// 调试：记录模块实例 ID
+const MODULE_INSTANCE_ID = randomUUID();
+console.log(`[OpenAIProxy] Module loaded, instance ID: ${MODULE_INSTANCE_ID}`);
+
+// 调试：包装 Map 以追踪所有操作
+const originalSet = pendingImages.set.bind(pendingImages);
+const originalDelete = pendingImages.delete.bind(pendingImages);
+const originalClear = pendingImages.clear.bind(pendingImages);
+
+pendingImages.set = function(id: string, images: ImageBlock[]) {
+  console.log(`[OpenAIProxy] MAP SET: ${id}, stack:`, new Error().stack?.split('\n').slice(1, 3).join('\n'));
+  return originalSet(id, images);
+};
+
+pendingImages.delete = function(id: string) {
+  console.log(`[OpenAIProxy] MAP DELETE: ${id}, stack:`, new Error().stack?.split('\n').slice(1, 3).join('\n'));
+  return originalDelete(id);
+};
+
+pendingImages.clear = function() {
+  console.log(`[OpenAIProxy] MAP CLEAR, stack:`, new Error().stack?.split('\n').slice(1, 3).join('\n'));
+  return originalClear();
+};
+
 /**
  * 注册一组图片，返回 injectId（用作请求标识）
  * Proxy 收到带有此 ID 的请求时会自动注入图片到最后一条 user message
@@ -75,9 +99,9 @@ const pendingImages = new Map<string, ImageBlock[]>();
 export function registerPendingImages(images: ImageBlock[]): string {
   const id = randomUUID();
   pendingImages.set(id, images);
-  // 30 秒后自动清理（防止泄漏）
-  setTimeout(() => pendingImages.delete(id), 30_000);
-  console.log(`[OpenAIProxy] Registered ${images.length} image(s) with id: ${id}`);
+  // 注意：不设置自动清理，因为 SDK 初始化可能需要时间
+  // 图片会在消费时被删除，或者在下一次请求时被清理
+  console.log(`[OpenAIProxy] Registered ${images.length} image(s) with id: ${id}, map size: ${pendingImages.size}, module instance: ${MODULE_INSTANCE_ID}`);
   return id;
 }
 
@@ -85,8 +109,17 @@ export function registerPendingImages(images: ImageBlock[]): string {
  * 消费已注册的图片（取出并删除）
  */
 export function consumePendingImages(id: string): ImageBlock[] | null {
+  console.log(`[OpenAIProxy] consumePendingImages called with id: ${id}, map size: ${pendingImages.size}, module instance: ${MODULE_INSTANCE_ID}`);
   const images = pendingImages.get(id) ?? null;
-  if (images) pendingImages.delete(id);
+  if (images) {
+    pendingImages.delete(id);
+  }
+  // 清理所有旧的图片（防止泄漏）- 保留最近 1 分钟内的
+  // 由于我们移除了自动清理，这里需要手动清理所有图片
+  if (pendingImages.size > 10) {
+    console.log(`[OpenAIProxy] Cleaning up ${pendingImages.size} old images`);
+    pendingImages.clear();
+  }
   return images;
 }
 
@@ -194,6 +227,19 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
     res.end(JSON.stringify({ error: { type: 'invalid_json', message: 'Request body is not valid JSON' } }));
     return;
   }
+
+  // DEBUG: 打印请求体结构（检查是否包含多模态内容）
+  const bodyForDebug = anthropicBody as Record<string, unknown>;
+  const messagesPreview = (bodyForDebug?.messages as Array<Record<string, unknown>>)?.map((m, i) => {
+    const content = m.content;
+    if (typeof content === 'string') return `[${i}] ${m.role}: string(${content.length})`;
+    if (Array.isArray(content)) {
+      const types = content.map((b: any) => b.type || 'unknown').join(', ');
+      return `[${i}] ${m.role}: array[${content.length}] (${types})`;
+    }
+    return `[${i}] ${m.role}: ${typeof content}`;
+  }).join('\n  ');
+  console.log(`[OpenAIProxy] Request body preview:\n  ${messagesPreview || 'no messages'}`);
 
   const isStream = !!(anthropicBody as Record<string, unknown>)?.stream;
 
