@@ -3,7 +3,7 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
-import { PluginManifest, MarketplaceSource, PluginSearchResult } from './types';
+import { PluginManifest, MarketplaceSource, PluginSearchResult } from './types.js';
 
 /**
  * Marketplace Client for discovering and downloading plugins

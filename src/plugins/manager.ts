@@ -5,7 +5,7 @@ import * as path from 'path';
 import { PluginLoader } from './loader.js';
 import { MarketplaceClient } from './marketplace.js';
 import { MCPClient } from './mcp-client.js';
-import { Plugin, PluginSearchResult, MarketplaceSource } from './types';
+import { Plugin, PluginSearchResult, MarketplaceSource } from './types.js';
 
 /**
  * Plugin Manager - handles plugin lifecycle (install, uninstall, enable, disable)

@@ -1,6 +1,6 @@
 // src/plugins/command-registry.ts
 
-import { CommandHandler, CommandContext, CommandResult } from './types';
+import { CommandHandler, CommandContext, CommandResult } from './types.js';
 
 export class CommandRegistry {
   private commands: Map<string, CommandHandler> = new Map();

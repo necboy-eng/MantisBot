@@ -1,7 +1,7 @@
 // src/channels/channel.interface.ts
 
 // 复用 types.ts 中统一的 FileAttachment 定义，消除重复
-import type { FileAttachment } from '../types';
+import type { FileAttachment } from '../types.js';
 export type { FileAttachment };
 
 export interface ChannelMessage {

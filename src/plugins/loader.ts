@@ -2,7 +2,7 @@
 
 import * as fs from 'fs/promises';
 import * as path from 'path';
-import { Plugin, PluginManifest, Skill, Command, MCPConfig, SdkPluginConfig, SdkMcpServerConfig, toSdkMcpConfig } from './types';
+import { Plugin, PluginManifest, Skill, Command, MCPConfig, SdkPluginConfig, SdkMcpServerConfig, toSdkMcpConfig } from './types.js';
 
 // 全局 PluginLoader 实例引用，用于刷新 skills prompt
 let globalPluginLoader: PluginLoader | null = null;
