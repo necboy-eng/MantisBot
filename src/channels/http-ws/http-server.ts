@@ -1026,7 +1026,8 @@ export async function createHTTPServer(options: HTTPServerOptions) {
           name: m.name,
           provider: m.provider || m.protocol || 'openai',
           protocol: m.protocol,
-          model: m.model
+          model: m.model,
+          enabled: (m as any).enabled !== false  // 包含 enabled 字段
         })),
         defaultModel: config.defaultModel || (config.models.length > 0 ? config.models[0].name : null),
         officePreviewServer: config.officePreviewServer  // 添加 Office 预览服务器配置

@@ -2539,7 +2539,7 @@ function App() {
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
               </svg>
             </button>
-            {config?.models && config.models.length >= 1 && (
+            {config?.models && config.models.filter(m => m.enabled !== false).length >= 1 && (
               <div
                 ref={modelDropdownRef}
                 className="relative"

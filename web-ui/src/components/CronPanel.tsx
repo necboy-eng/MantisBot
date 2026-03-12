@@ -109,7 +109,9 @@ export function CronPanel({ isOpen, onClose }: CronPanelProps) {
       ]);
       const modelsData = await modelsRes.json();
       const skillsData = await skillsRes.json();
-      setAvailableModels(modelsData.models || []);
+      // 只保留启用的模型
+      const enabledModels = (modelsData.models || []).filter((m: { enabled?: boolean }) => m.enabled !== false);
+      setAvailableModels(enabledModels);
       setAvailableSkills(skillsData.skills || []);
     } catch (err) {
       console.error('Failed to load models/skills:', err);
