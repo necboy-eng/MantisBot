@@ -38,6 +38,7 @@
   "file": {
     "openInCanvas": "在画布中打开",
     "download": "下载文件",
+    "downloadFailed": "下载失败",
     "referencedFiles": "引用的文件/目录"
   },
   "office": {
@@ -600,5 +601,9 @@
     "testModelId": "请先填写模型 ID",
     "testApiKey": "请先填写 API 密钥",
     "testModelLabel": "模型: {{model}}"
+  },
+  "scroll": {
+    "scrollToTop": "回到顶部",
+    "scrollToBottom": "滚动到底部"
   }
 }

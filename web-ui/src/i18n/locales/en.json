@@ -35,6 +35,7 @@
   "file": {
     "openInCanvas": "Open in Canvas",
     "download": "Download",
+    "downloadFailed": "Download failed",
     "referencedFiles": "Referenced Files/Directories"
   },
   "office": {
@@ -584,5 +585,9 @@
     "testResult": {
       "failed": "Connection failed"
     }
+  },
+  "scroll": {
+    "scrollToTop": "Scroll to top",
+    "scrollToBottom": "Scroll to bottom"
   }
 }

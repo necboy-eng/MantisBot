@@ -16,6 +16,7 @@ import { LanguageSwitcher } from './components/LanguageSwitcher';
 import { ThemeSwitcher } from './components/ThemeSwitcher';
 import { MessageBubble } from './components/MessageBubble';
 import { LogDrawer } from './components/LogDrawer';
+import { ScrollButtons } from './components/ScrollButtons';
 import type { LogEntry } from './components/LogDrawer';
 import { ToastContainer } from './components/Toast';
 import type { ToastItem } from './components/Toast';
@@ -229,6 +230,26 @@ function FileAttachmentCard({ attachment, onOpenCanvas }: { attachment: FileAtta
   const Icon = getFileIcon(attachment.mimeType);
   const isImage = attachment.mimeType?.startsWith('image/');
 
+  const handleDownload = async (e: React.MouseEvent) => {
+    e.preventDefault();
+    try {
+      const res = await authFetch(appendTokenToUrl(attachment.url));
+      if (!res.ok) throw new Error(`Download failed: ${res.status}`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = attachment.name;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Download failed:', err);
+      alert(t('file.downloadFailed', '下载失败'));
+    }
+  };
+
   return (
     <div className="flex items-center gap-3 p-3 bg-white dark:bg-gray-700 rounded-lg border border-gray-200 dark:border-gray-600 hover:border-primary-400 transition-colors">
       <div className="flex-shrink-0">
@@ -257,14 +278,13 @@ function FileAttachmentCard({ attachment, onOpenCanvas }: { attachment: FileAtta
       >
         <ExternalLink className="w-5 h-5" />
       </button>
-      <a
-        href={attachment.url}
-        download={attachment.name}
+      <button
+        onClick={handleDownload}
         className="flex-shrink-0 p-2 text-gray-500 hover:text-primary-600 dark:text-gray-400 dark:hover:text-primary-400 transition-colors"
         title={t('file.download')}
       >
         <Download className="w-5 h-5" />
-      </a>
+      </button>
     </div>
   );
 }
@@ -314,6 +334,7 @@ function App() {
 
   // 聊天消息自动滚动相关
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
   const [autoScroll, setAutoScroll] = useState(true);
 
   // textarea 引用(用于自动调整高度)
@@ -2637,11 +2658,14 @@ function App() {
           </div>
         </div>
 
-        {/* Messages */}
-        <div
-          className="flex-1 overflow-y-auto overflow-x-hidden p-2 md:p-4 space-y-4 min-h-0 relative"
-          onScroll={handleMessagesScroll}
-        >
+        {/* Messages container wrapper - relative for scroll buttons positioning */}
+        <div className="flex-1 min-h-0 relative">
+          {/* Messages */}
+          <div
+            ref={messagesContainerRef}
+            className="absolute inset-0 overflow-y-auto overflow-x-hidden p-2 md:p-4 space-y-4"
+            onScroll={handleMessagesScroll}
+          >
           {/* Global Error Display */}
           {globalError && (
             <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-lg flex items-center justify-between">
@@ -2759,6 +2783,10 @@ function App() {
           )}
           {/* 滚动锚点 - 用于自动滚动到底部 */}
           <div ref={messagesEndRef} />
+          </div>
+
+          {/* 滚动快捷按钮 */}
+          <ScrollButtons scrollContainerRef={messagesContainerRef} />
         </div>
 
         {/* Input */}
