@@ -40,6 +40,9 @@
     "download": "下载文件",
     "referencedFiles": "引用的文件/目录"
   },
+  "office": {
+    "openInNewWindow": "在新窗口打开"
+  },
   "message": {
     "you": "你",
     "assistant": "助手",

@@ -37,6 +37,9 @@
     "download": "Download",
     "referencedFiles": "Referenced Files/Directories"
   },
+  "office": {
+    "openInNewWindow": "Open in New Window"
+  },
   "message": {
     "you": "You",
     "assistant": "Assistant",

@@ -1442,35 +1442,9 @@ function App() {
     }
   }
 
-  // Office 文件扩展名列表
-  const officeExtensions = ['doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx'];
-
   // 打开画布并选择文件（从附件）
   function openCanvasFromAttachment(attachment: FileAttachment) {
     const ext = attachment.name.split('.').pop()?.toLowerCase() || '';
-
-    // 判断是否为 Office 文件
-    if (officeExtensions.includes(ext) && config?.officePreviewServer) {
-      // Office 文件：使用 OnlyOffice 预览服务器打开
-      const filename = attachment.url.replace('/api/files/', '');
-      const filePath = `data/uploads/${filename}`;
-
-      // 文件 URL：OnlyOffice 服务端需要从这个地址下载���件
-      // 使用 /api/explore/binary 端点，因为它支持正确的 MIME 类型
-      const backendPort = '8118';
-      const fileUrl = appendTokenToUrl(`${window.location.port === '3081' ? 'http://localhost:' + backendPort : window.location.origin}/api/explore/binary?path=${encodeURIComponent(filePath)}`);
-
-      // 构建预览 URL
-      // 开发模式：前端在 3081，需要直接访问 OnlyOffice (8081)
-      // 生产模式：通过 /office-preview/ 代理
-      const isDev = window.location.port === '3081';
-      const previewUrl = isDev
-        ? `${config.officePreviewServer}/#/?url=${encodeURIComponent(fileUrl)}`
-        : `/office-preview/#/?url=${encodeURIComponent(fileUrl)}`;
-
-      window.open(previewUrl, '_blank');
-      return;
-    }
 
     // 检查是否是 /api/files/ 开头的 URL（保存的附件）
     // 这种情况下，图片可以直接通过 /api/files/xxx.png 访问

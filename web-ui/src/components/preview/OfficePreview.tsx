@@ -1,4 +1,6 @@
 import { useEffect, useState, useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
+import { ExternalLink } from 'lucide-react';
 import { authFetch, appendTokenToUrl } from '../../utils/auth';
 
 interface OfficePreviewProps {
@@ -9,6 +11,7 @@ interface OfficePreviewProps {
 }
 
 export function OfficePreview({ filePath, type, fileApiUrl, officePreviewServer }: OfficePreviewProps) {
+  const { t } = useTranslation();
   const [content, setContent] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
 
@@ -90,12 +93,23 @@ export function OfficePreview({ filePath, type, fileApiUrl, officePreviewServer 
   // PPT 文件且有 OnlyOffice：使用 iframe 预览
   if (type === 'pptx' && onlyOfficePreviewUrl) {
     return (
-      <iframe
-        src={onlyOfficePreviewUrl}
-        className="w-full h-full border-0"
-        title="PPT Preview"
-        allow="fullscreen"
-      />
+      <div className="relative w-full h-full">
+        {/* 在新窗口打开按钮 */}
+        <button
+          onClick={() => window.open(onlyOfficePreviewUrl, '_blank')}
+          className="absolute top-2 right-2 z-10 flex items-center gap-1 px-2 py-1 bg-white/90 dark:bg-gray-800/90 rounded-md shadow-sm text-xs text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+          title={t('office.openInNewWindow', '在新窗口打开')}
+        >
+          <ExternalLink className="w-3.5 h-3.5" />
+          <span>{t('office.openInNewWindow', '在新窗口打开')}</span>
+        </button>
+        <iframe
+          src={onlyOfficePreviewUrl}
+          className="w-full h-full border-0"
+          title="PPT Preview"
+          allow="fullscreen"
+        />
+      </div>
     );
   }
 
@@ -121,9 +135,22 @@ export function OfficePreview({ filePath, type, fileApiUrl, officePreviewServer 
   }
 
   return (
-    <div
-      className="p-4 overflow-auto h-full dark:bg-gray-800 dark:text-white"
-      dangerouslySetInnerHTML={{ __html: content }}
-    />
+    <div className="relative w-full h-full flex flex-col">
+      {/* 在新窗口打开按钮（OnlyOffice 可用时显示） */}
+      {onlyOfficePreviewUrl && (
+        <button
+          onClick={() => window.open(onlyOfficePreviewUrl, '_blank')}
+          className="absolute top-2 right-2 z-10 flex items-center gap-1 px-2 py-1 bg-white/90 dark:bg-gray-800/90 rounded-md shadow-sm text-xs text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+          title={t('office.openInNewWindow', '在新窗口打开')}
+        >
+          <ExternalLink className="w-3.5 h-3.5" />
+          <span>{t('office.openInNewWindow', '在新窗口打开')}</span>
+        </button>
+      )}
+      <div
+        className="p-4 overflow-auto h-full dark:bg-gray-800 dark:text-white"
+        dangerouslySetInnerHTML={{ __html: content }}
+      />
+    </div>
   );
 }
