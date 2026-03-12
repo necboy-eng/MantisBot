@@ -42,8 +42,8 @@ export function OfficePreview({ filePath, type, fileApiUrl, officePreviewServer 
   }, [officePreviewServer, fileUrl]);
 
   useEffect(() => {
-    // PPT 文件且配置了 OnlyOffice：使用 iframe 预览，不需要加载内容
-    if (type === 'pptx' && onlyOfficePreviewUrl) {
+    // 配置了 OnlyOffice：使用 iframe 预览，不需要加载内容
+    if (onlyOfficePreviewUrl) {
       setContent(''); // 清空内容，使用 iframe
       setError(null);
       return;
@@ -90,8 +90,8 @@ export function OfficePreview({ filePath, type, fileApiUrl, officePreviewServer 
     loadContent();
   }, [filePath, type, fileApiUrl, onlyOfficePreviewUrl]);
 
-  // PPT 文件且有 OnlyOffice：使用 iframe 预览
-  if (type === 'pptx' && onlyOfficePreviewUrl) {
+  // 配置了 OnlyOffice：使用 iframe 预览所有 Office 文件
+  if (onlyOfficePreviewUrl) {
     return (
       <div className="relative w-full h-full">
         {/* 在新窗口打开按钮 */}
@@ -106,7 +106,7 @@ export function OfficePreview({ filePath, type, fileApiUrl, officePreviewServer 
         <iframe
           src={onlyOfficePreviewUrl}
           className="w-full h-full border-0"
-          title="PPT Preview"
+          title="Office Preview"
           allow="fullscreen"
         />
       </div>
@@ -135,22 +135,8 @@ export function OfficePreview({ filePath, type, fileApiUrl, officePreviewServer 
   }
 
   return (
-    <div className="relative w-full h-full flex flex-col">
-      {/* 在新窗口打开按钮（OnlyOffice 可用时显示） */}
-      {onlyOfficePreviewUrl && (
-        <button
-          onClick={() => window.open(onlyOfficePreviewUrl, '_blank')}
-          className="absolute top-2 right-2 z-10 flex items-center gap-1 px-2 py-1 bg-white/90 dark:bg-gray-800/90 rounded-md shadow-sm text-xs text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
-          title={t('office.openInNewWindow', '在新窗口打开')}
-        >
-          <ExternalLink className="w-3.5 h-3.5" />
-          <span>{t('office.openInNewWindow', '在新窗口打开')}</span>
-        </button>
-      )}
-      <div
-        className="p-4 overflow-auto h-full dark:bg-gray-800 dark:text-white"
-        dangerouslySetInnerHTML={{ __html: content }}
-      />
+    <div className="p-4 overflow-auto h-full dark:bg-gray-800 dark:text-white">
+      <div dangerouslySetInnerHTML={{ __html: content }} />
     </div>
   );
 }
