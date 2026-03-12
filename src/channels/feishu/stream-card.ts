@@ -42,12 +42,27 @@ export class FeishuStreamCard {
     try {
       let r = text;
 
+      console.log(`[StreamCard] optimizeMarkdownStyle called, cardVersion=${cardVersion}`);
+      console.log(`[StreamCard] Original text length: ${text.length}, first 200 chars: ${text.substring(0, 200)}`);
+
       // 1. 提取代码块，用占位符保护，处理后再还原
       const MARK = '___CB_';
       const codeBlocks: string[] = [];
+
+      // 测试正则是否能匹配
+      const testMatch = text.match(/```[\s\S]*?```/g);
+      console.log(`[StreamCard] Regex test - found ${testMatch?.length || 0} code blocks`);
+      if (testMatch) {
+        console.log(`[StreamCard] Test matches:`, testMatch.map(m => m.substring(0, 30)));
+      }
+
       r = r.replace(/```[\s\S]*?```/g, (m) => {
-        return `${MARK}${codeBlocks.length}___`;
+        codeBlocks.push(m);  // 保存代码块内容
+        console.log(`[StreamCard] Found code block ${codeBlocks.length}: ${m.substring(0, 50)}...`);
+        return `${MARK}${codeBlocks.length - 1}___`;  // 使用当前索引
       });
+
+      console.log(`[StreamCard] Code blocks found: ${codeBlocks.length}, text after placeholder: ${r.substring(0, 100)}...`);
 
       // 2. 标题降级
       const hasH1toH3 = /^#{1,3} /m.test(text);
@@ -68,9 +83,25 @@ export class FeishuStreamCard {
         // 4c. 表格后：在表格块末尾追加 <br>
         r = r.replace(/((?:^\|.+\|[^\S\n]*\n?)+)/gm, '$1\n<br>\n');
 
-        // 5. 还原代码块，并在前后追加 <br>
+        // 5. 还原代码块
+        // 飞书 Markdown 不支持 ``` 代码块，转换为普通文本显示
+        console.log(`[StreamCard] Restoring ${codeBlocks.length} code blocks...`);
         codeBlocks.forEach((block, i) => {
-          r = r.replace(`${MARK}${i}___`, `\n<br>\n${block}\n<br>\n`);
+          const placeholder = `${MARK}${i}___`;
+
+          // 提取代码内容
+          let codeContent = block
+            .replace(/^```\w*\n?/, '')  // 去掉开头的 ```
+            .replace(/```$/, '')        // 去掉结尾的 ```
+
+          // 用 <code> 标签或纯文本方式显示
+          const beforeReplace = r;
+          r = r.replace(placeholder, `\n\n【代码】\n${codeContent}\n【代码结束】\n\n`);
+          if (r === beforeReplace) {
+            console.log(`[StreamCard] WARNING: Placeholder ${placeholder} not found in text!`);
+          } else {
+            console.log(`[StreamCard] Restored code block ${i}: ${codeContent.substring(0, 30)}...`);
+          }
         });
       } else {
         // 还原代码块（无 <br>）
