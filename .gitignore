@@ -69,3 +69,4 @@ docker-compose-release.yaml
 docs/plans/
 TODO.md
 GEMINI.md
+.learnings/
