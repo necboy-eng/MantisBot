@@ -2,6 +2,7 @@ import * as lark from '@larksuiteoapi/node-sdk';
 import fs from 'fs';
 import path from 'path';
 import { getConfig } from '../../config/loader.js';
+import type { FeishuInstanceConfig } from '../../config/schema.js';
 import { getFileStorage } from '../../files/index.js';
 import type { FileAttachment } from '../../types.js';
 import { buildMarkdownCard } from './table-converter.js';
@@ -719,4 +720,245 @@ function extractImageKeysFromPost(content: any): string[] {
 
   traverse(content);
   return keys;
+}
+
+// ── 多实例辅助函数（内部使用，不导出）────────────────────────────────────────
+
+/**
+ * 使用指定 lark client 处理消息媒体附件（多实例版本）
+ * 通过临时替换模块级 client 变量来复用现有 processFeishuMessageMedia 逻辑
+ */
+async function processFeishuMessageMediaWithClient(
+  message: any,
+  larkClient: any
+): Promise<FileAttachment[]> {
+  const originalClient = client;
+  client = larkClient;
+  try {
+    return await processFeishuMessageMedia(message);
+  } finally {
+    client = originalClient;
+  }
+}
+
+/**
+ * 使用指定 lark client 发送文件（多实例版本）
+ */
+async function sendFeishuFileWithClient(
+  chatId: string,
+  attachment: FileAttachment,
+  larkClient: any
+): Promise<void> {
+  const originalClient = client;
+  client = larkClient;
+  try {
+    await sendFeishuFile(chatId, attachment);
+  } finally {
+    client = originalClient;
+  }
+}
+
+// ── FeishuClient 类（多实例支持）────────────────────────────────────────────
+
+export type FeishuMessageHandler = (
+  message: string,
+  chatId: string,
+  userId: string,
+  messageId: string,
+  attachments?: FileAttachment[]
+) => Promise<void>;
+
+export class FeishuClient {
+  private instanceId: string;
+  private config: FeishuInstanceConfig;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private larkClient: any = null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private wsClientInstance: any = null;
+  private botOpenId: string | undefined;
+  private processedMessages: Map<string, number> = new Map();
+  private readonly MESSAGE_DEDUP_TTL = 5 * 60 * 1000;
+
+  constructor(config: FeishuInstanceConfig) {
+    this.instanceId = config.id;
+    this.config = config;
+  }
+
+  private isProcessed(messageId: string): boolean {
+    const now = Date.now();
+    for (const [id, ts] of this.processedMessages) {
+      if (now - ts > this.MESSAGE_DEDUP_TTL) this.processedMessages.delete(id);
+    }
+    if (this.processedMessages.has(messageId)) return true;
+    this.processedMessages.set(messageId, now);
+    return false;
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private resolveDomainForInstance(domain?: string): any {
+    if (!domain || domain === 'feishu') return lark.Domain.Feishu;
+    if (domain === 'lark') return lark.Domain.Lark;
+    return domain.replace(/\/+$/, '');
+  }
+
+  async start(onMessage: FeishuMessageHandler): Promise<void> {
+    const { appId, appSecret, domain, debug } = this.config;
+    const tag = `[FeishuClient:${this.instanceId}]`;
+
+    if (!appId || !appSecret) {
+      console.warn(`${tag} Missing appId or appSecret, skipping start`);
+      return;
+    }
+
+    const resolvedDomain = this.resolveDomainForInstance(domain);
+
+    // 创建 REST client
+    this.larkClient = new lark.Client({
+      appId,
+      appSecret,
+      appType: lark.AppType.SelfBuild,
+      domain: resolvedDomain,
+    });
+
+    // 预检测 bot
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const resp: any = await this.larkClient.request({
+        method: 'GET',
+        url: '/open-apis/bot/v3/info',
+      });
+      if (resp.code !== 0) {
+        console.error(`${tag} Bot probe failed: ${resp.msg}`);
+        return;
+      }
+      this.botOpenId = resp.bot?.open_id ?? resp.data?.open_id ?? resp.data?.bot?.open_id;
+      const botName = resp.bot?.app_name ?? resp.data?.app_name ?? resp.data?.bot?.app_name;
+      console.log(`${tag} Bot verified: ${botName} (${this.botOpenId})`);
+    } catch (err: any) {
+      console.error(`${tag} Bot probe error: ${err.message}`);
+      return;
+    }
+
+    // 创建 WSClient
+    this.wsClientInstance = new lark.WSClient({
+      appId,
+      appSecret,
+      domain: resolvedDomain,
+      loggerLevel: debug ? lark.LoggerLevel.debug : lark.LoggerLevel.info,
+    });
+
+    const capturedBotOpenId = this.botOpenId;
+
+    this.wsClientInstance.start({
+      eventDispatcher: new lark.EventDispatcher({}).register({
+        'im.message.receive_v1': async (data: any) => {
+          const message = data.message;
+          const messageId = message.message_id;
+
+          if (this.isProcessed(messageId)) {
+            console.log(`${tag} Duplicate message ignored: ${messageId}`);
+            return;
+          }
+
+          // 群聊 @bot 检查
+          const isGroupChat = message.chat_type === 'group';
+          if (isGroupChat) {
+            const mentions: any[] = Array.isArray(message.mentions) ? message.mentions : [];
+            const isBotMentioned = mentions.some(
+              (m: any) =>
+                m.id?.open_id === capturedBotOpenId ||
+                m.id?.union_id === capturedBotOpenId ||
+                m.id?.user_id === capturedBotOpenId
+            );
+            if (!isBotMentioned) {
+              console.log(`${tag} Group message without @bot ignored: ${messageId}`);
+              return;
+            }
+          }
+
+          const chatId = message.chat_id;
+          const senderId = data.sender?.sender_id;
+          const userId = senderId?.user_id || senderId?.union_id || senderId?.open_id || '';
+          const msgType = message.message_type || message.msg_type;
+
+          let content = '';
+          if (msgType === 'text' || msgType === 'post') {
+            try { content = JSON.parse(message.content || '{}').text || ''; } catch { content = message.content || ''; }
+            content = content.replace(/@_user_\d+\s*/g, '').trim();
+          } else if (msgType === 'image') {
+            content = '[图片]';
+          } else if (msgType === 'file') {
+            content = `[文件] ${JSON.parse(message.content || '{}').file_name || '未知文件'}`;
+          } else if (msgType === 'media') {
+            content = `[媒体] ${JSON.parse(message.content || '{}').file_name || '未知媒体'}`;
+          } else if (msgType === 'audio') {
+            content = `[音频] ${JSON.parse(message.content || '{}').file_name || '未知音频'}`;
+          } else {
+            content = `[${msgType}]`;
+          }
+
+          console.log(`${tag} Message from ${userId}, chatId: ${chatId}, type: ${msgType}`);
+
+          // 处理媒体附件
+          let attachments: FileAttachment[] = [];
+          if (['image', 'file', 'media', 'audio', 'post'].includes(msgType)) {
+            try {
+              attachments = await processFeishuMessageMediaWithClient(message, this.larkClient);
+            } catch (err) {
+              console.error(`${tag} Error processing attachments:`, err);
+            }
+          }
+
+          await onMessage(content, chatId, userId, messageId, attachments);
+        },
+      }),
+    });
+
+    console.log(`${tag} Started`);
+  }
+
+  async stop(): Promise<void> {
+    if (this.wsClientInstance) {
+      try { (this.wsClientInstance as any).stop?.(); } catch { /* ignore */ }
+      this.wsClientInstance = null;
+    }
+    this.larkClient = null;
+    console.log(`[FeishuClient:${this.instanceId}] Stopped`);
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  getLarkClient(): any {
+    return this.larkClient;
+  }
+
+  async sendMessage(chatId: string, message: string): Promise<void> {
+    if (!this.larkClient) throw new Error(`[FeishuClient:${this.instanceId}] Not started`);
+    await this.larkClient.request({
+      method: 'POST',
+      url: '/open-apis/im/v1/messages',
+      params: { receive_id_type: 'chat_id' },
+      data: {
+        receive_id: chatId,
+        msg_type: 'text',
+        content: JSON.stringify({ text: message }),
+      },
+    });
+  }
+
+  async replyMessage(messageId: string, message: string): Promise<void> {
+    if (!this.larkClient) throw new Error(`[FeishuClient:${this.instanceId}] Not started`);
+    await this.larkClient.request({
+      method: 'POST',
+      url: `/open-apis/im/v1/messages/${messageId}/reply`,
+      data: {
+        msg_type: 'text',
+        content: JSON.stringify({ text: message }),
+      },
+    });
+  }
+
+  async sendFile(chatId: string, attachment: FileAttachment): Promise<void> {
+    if (!this.larkClient) throw new Error(`[FeishuClient:${this.instanceId}] Not started`);
+    await sendFeishuFileWithClient(chatId, attachment, this.larkClient);
+  }
 }

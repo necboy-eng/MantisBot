@@ -87,6 +87,7 @@ interface Session {
   approvalMode?: ApprovalMode;  // 审批模式
   starred?: boolean;            // 星标置顶
   platform?: string;            // 渠道平台标识（feishu, slack, web 等）
+  feishuInstanceId?: string;    // 飞书实例 ID（仅飞书渠道有效）
 }
 
 interface AgentTeam {
@@ -139,6 +140,29 @@ function getSessionIcon(platform: string | undefined) {
     default:
       return MessageCircle; // 默认（web）
   }
+}
+
+// 根据实例 ID 生成颜色（用于区分不同飞书实例）
+function getInstanceColor(instanceId: string): string {
+  const colors = [
+    'bg-blue-500',
+    'bg-green-500',
+    'bg-purple-500',
+    'bg-orange-500',
+    'bg-pink-500',
+    'bg-cyan-500',
+    'bg-rose-500',
+    'bg-indigo-500',
+    'bg-teal-500',
+    'bg-amber-500',
+  ];
+  // 简单哈希，确保同一实例 ID 总是返回相同颜色
+  let hash = 0;
+  for (let i = 0; i < instanceId.length; i++) {
+    hash = ((hash << 5) - hash) + instanceId.charCodeAt(i);
+    hash = hash & hash;
+  }
+  return colors[Math.abs(hash) % colors.length];
 }
 
 // 工具名称友好显示
@@ -2415,7 +2439,19 @@ function App() {
                         : <Square className="w-4 h-4 text-gray-400 flex-shrink-0" />)
                     : (() => {
                         const IconComponent = getSessionIcon(session.platform);
-                        return <IconComponent className="w-4 h-4 text-gray-500 flex-shrink-0" />;
+                        return (
+                          <div className="relative flex-shrink-0">
+                            <IconComponent className="w-4 h-4 text-gray-500" />
+                            {session.platform === 'feishu' && session.feishuInstanceId && (
+                              <span
+                                title={`实例: ${session.feishuInstanceId}`}
+                                className={`absolute -top-1.5 -right-2 px-1.5 text-[9px] font-bold ${getInstanceColor(session.feishuInstanceId)} text-white rounded shadow-sm cursor-help`}
+                              >
+                                {session.feishuInstanceId.slice(0, 2).toUpperCase()}
+                              </span>
+                            )}
+                          </div>
+                        );
                       })()
                   }
                   <span className="truncate flex-1">{session.name || '(无标题)'}</span>
@@ -2471,7 +2507,19 @@ function App() {
                     : <Square className="w-4 h-4 text-gray-400 flex-shrink-0" />)
                 : (() => {
                     const IconComponent = getSessionIcon(session.platform);
-                    return <IconComponent className="w-4 h-4 text-gray-500 flex-shrink-0" />;
+                    return (
+                      <div className="relative flex-shrink-0">
+                        <IconComponent className="w-4 h-4 text-gray-500" />
+                        {session.platform === 'feishu' && session.feishuInstanceId && (
+                          <span
+                            title={`实例: ${session.feishuInstanceId}`}
+                            className={`absolute -top-1.5 -right-2 px-1.5 text-[9px] font-bold ${getInstanceColor(session.feishuInstanceId)} text-white rounded shadow-sm cursor-help`}
+                          >
+                            {session.feishuInstanceId.slice(0, 2).toUpperCase()}
+                          </span>
+                        )}
+                      </div>
+                    );
                   })()
               }
               <span className="truncate flex-1">{session.name || '(无标题)'}</span>

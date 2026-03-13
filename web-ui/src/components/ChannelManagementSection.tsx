@@ -83,7 +83,7 @@ export function ChannelManagementSection({ isOpen }: ChannelManagementSectionPro
   async function toggleChannel(id: string, enabled: boolean) {
     setLoading(true);
     try {
-      await authFetch(`/api/channels/${id}/toggle`, {
+      await authFetch(`/api/channels/${encodeURIComponent(id)}/toggle`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ enabled }),
@@ -106,7 +106,7 @@ export function ChannelManagementSection({ isOpen }: ChannelManagementSectionPro
     });
 
     try {
-      const res = await authFetch(`/api/channels/${id}/test`, { method: 'POST' });
+      const res = await authFetch(`/api/channels/${encodeURIComponent(id)}/test`, { method: 'POST' });
       const data = await res.json();
 
       setTestResults(prev => ({
@@ -134,7 +134,7 @@ export function ChannelManagementSection({ isOpen }: ChannelManagementSectionPro
 
     setLoading(true);
     try {
-      await authFetch(`/api/channels/${id}`, { method: 'DELETE' });
+      await authFetch(`/api/channels/${encodeURIComponent(id)}`, { method: 'DELETE' });
       invalidateCache('/api/channels');
       setChannels(prev => prev.filter(c => c.id !== id));
     } catch (err) {

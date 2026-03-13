@@ -46,6 +46,11 @@ export interface ClaudeAgentRunnerOptions {
    * 用于 OpenAI 代理模式：传入编码了上游配置的代理 key
    */
   overrideApiKey?: string;
+  /**
+   * 覆盖全局 config.enabledSkills，仅为此次 runner 实例启用指定的 skills。
+   * 若不传，则回退到全局配置；传空数组则禁用所有 skills。
+   */
+  enabledSkills?: string[];
 }
 
 export interface StreamChunk {
@@ -339,6 +344,7 @@ export class ClaudeAgentRunner extends EventEmitter {
     anthropicBaseUrl?: string;
     defaultHeaders?: Record<string, string>;
     overrideApiKey?: string;
+    enabledSkills?: string[];
   };
 
   // Agent SDK 会话 ID（用于 resume 继续会话）
@@ -403,6 +409,7 @@ export class ClaudeAgentRunner extends EventEmitter {
       anthropicBaseUrl: options.anthropicBaseUrl,
       defaultHeaders: options.defaultHeaders,
       overrideApiKey: options.overrideApiKey,
+      enabledSkills: options.enabledSkills,
     };
     console.log('[ClaudeAgentRunner] Initialized with approvalMode:', approvalMode);
   }
@@ -731,7 +738,8 @@ export class ClaudeAgentRunner extends EventEmitter {
     // Agent Team 激活时跳过：协调者不直接执行技能，skills 由各子 agent 自身携带
     if (!this.options.activeTeam) {
       const config = getConfig();
-      const enabledSkills = config.enabledSkills || [];
+      // 优先使用 options.enabledSkills（任务级覆盖），回退到全局配置
+      const enabledSkills = this.options.enabledSkills ?? config.enabledSkills ?? [];
 
       // 获取 standalone skill 对象（按 enabledSkills 过滤）
       const standaloneSkillObjs = this.skillsLoader

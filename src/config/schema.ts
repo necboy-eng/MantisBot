@@ -167,6 +167,70 @@ export const ModelConfigSchema = z.object({
   }).optional(),
 });
 
+// ── 飞书子 Schema（可复用，供 FeishuInstanceSchema 引用）────────────────────
+export const FeishuStreamingSchema = z.object({
+  enabled: z.boolean().default(true),
+  updateInterval: z.number().default(500),
+  showThinking: z.boolean().default(true),
+}).default({ enabled: true, updateInterval: 500, showThinking: true });
+
+export const FeishuPermissionsSchema = z.object({
+  im: z.object({
+    enabled: z.boolean().default(true),
+    requireUAT: z.boolean().default(true),
+  }).default({ enabled: true, requireUAT: true }),
+  doc: z.object({
+    enabled: z.boolean().default(true),
+    requireUAT: z.boolean().default(true),
+  }).default({ enabled: true, requireUAT: true }),
+  bitable: z.object({
+    enabled: z.boolean().default(true),
+    requireUAT: z.boolean().default(false),
+  }).default({ enabled: true, requireUAT: false }),
+  task: z.object({
+    enabled: z.boolean().default(true),
+    requireUAT: z.boolean().default(false),
+  }).default({ enabled: true, requireUAT: false }),
+  calendar: z.object({
+    enabled: z.boolean().default(true),
+    requireUAT: z.boolean().default(true),
+  }).default({ enabled: true, requireUAT: true }),
+}).default({
+  im: { enabled: true, requireUAT: true },
+  doc: { enabled: true, requireUAT: true },
+  bitable: { enabled: true, requireUAT: false },
+  task: { enabled: true, requireUAT: false },
+  calendar: { enabled: true, requireUAT: true },
+});
+
+export const FeishuOAuthSchema = z.object({
+  enabled: z.boolean().default(true),
+  deviceCodeTTL: z.number().default(300),
+  pollInterval: z.number().default(3000),
+  maxPollAttempts: z.number().default(60),
+}).default({ enabled: true, deviceCodeTTL: 300, pollInterval: 3000, maxPollAttempts: 60 });
+
+// 单个飞书实例配置
+export const FeishuInstanceSchema = z.object({
+  id: z.string(),
+  enabled: z.boolean().default(true),
+  appId: z.string(),
+  appSecret: z.string(),
+  verificationToken: z.string().optional(),
+  encryptKey: z.string().optional(),
+  domain: z.enum(['feishu', 'lark']).default('feishu'),
+  connectionMode: z.enum(['websocket', 'polling']).default('websocket'),
+  workingDirectory: z.string().optional(),
+  profile: z.string().default('default'),
+  team: z.string().optional(),
+  streaming: FeishuStreamingSchema,
+  permissions: FeishuPermissionsSchema,
+  oauth: FeishuOAuthSchema,
+  debug: z.boolean().default(false),
+});
+
+export type FeishuInstanceConfig = z.infer<typeof FeishuInstanceSchema>;
+
 export const FeishuConfigSchema = z.object({
   enabled: z.boolean().default(false),
   appId: z.string().optional(),
@@ -513,6 +577,7 @@ export const ConfigSchema = z.object({
       token: z.string().optional(),
     }).optional(),
   }).optional(),
+  feishuInstances: z.array(FeishuInstanceSchema).optional().default([]),
   plugins: z.array(PluginSchema).default([]).transform(
     plugins => plugins.map(p => typeof p === 'string' ? { name: p, enabled: true } : p
   )),

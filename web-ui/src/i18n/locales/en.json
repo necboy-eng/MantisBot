@@ -221,6 +221,20 @@
       "enabled": "Enabled",
       "config": "Configuration",
       "required": "Required"
+    },
+    "feishu": {
+      "instanceId": "Instance ID",
+      "instanceIdPlaceholder": "e.g. hr-bot, dev-bot",
+      "instanceIdHint": "Unique identifier to distinguish different Feishu bot instances",
+      "agentProfile": "Agent Profile",
+      "defaultProfile": "Default profile",
+      "agentProfileHint": "Agent profile for this bot, leave empty to use system default",
+      "agentTeam": "Agent Team",
+      "noTeam": "No team",
+      "agentTeamHint": "Assign an Agent team to this bot, leave empty for single-agent mode",
+      "workingDirectory": "Working Directory",
+      "workingDirectoryPlaceholder": "e.g. /Users/me/projects/hr",
+      "workingDirectoryHint": "Working directory for Agent task execution, leave empty to use the process cwd (project root)"
     }
   },
   "channel": {

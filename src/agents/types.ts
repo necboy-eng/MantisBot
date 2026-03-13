@@ -74,10 +74,15 @@ export interface AgentRunnerOptions {
   abortSignal?: AbortSignal;           // 用于中断执行的信号
   /** 激活的 Agent 团队配置（仅 Claude SDK 支持） */
   activeTeam?: import('../config/schema.js').AgentTeam;
-  /** 用户 ID（来自渠道，用于工具上下文，如飞书的 senderOpenId） */
+/** 用户 ID（来自渠道，用于工具上下文，如飞书的 senderOpenId） */
   userId?: string;
   /** 平台标识（如 feishu, http, dingtalk 等） */
   platform?: string;
+  /**
+   * 覆盖全局 config.enabledSkills，仅为此次 runner 实例启用指定的 skills。
+   * 若不传或传空数组，则禁用所有 skills（与默认行为一致）。
+   */
+  enabledSkills?: string[];
 }
 
 /**

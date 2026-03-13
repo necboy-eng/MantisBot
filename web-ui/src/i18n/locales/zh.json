@@ -224,6 +224,20 @@
       "enabled": "启用",
       "config": "配置",
       "required": "必填"
+    },
+    "feishu": {
+      "instanceId": "实例 ID",
+      "instanceIdPlaceholder": "如：hr-bot、dev-bot",
+      "instanceIdHint": "唯一标识符，用于区分不同的飞书机器人实例",
+      "agentProfile": "Agent 人格",
+      "defaultProfile": "默认人格",
+      "agentProfileHint": "该机器人使用的 Agent 人格，留空则使用系统默认",
+      "agentTeam": "Agent 团队",
+      "noTeam": "不绑定团队",
+      "agentTeamHint": "为该机器人指定 Agent 团队，留空则使用单 Agent 模式",
+      "workingDirectory": "工作目录",
+      "workingDirectoryPlaceholder": "如：/Users/me/projects/hr",
+      "workingDirectoryHint": "该机器人 Agent 执行任务时的起始目录，留空则使用进程启动目录（项目根目录）"
     }
   },
   "channel": {

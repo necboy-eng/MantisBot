@@ -31,6 +31,10 @@ export class ChannelRegistry {
     return undefined;
   }
 
+  getAllByPlatform(platform: string): IChannel[] {
+    return Array.from(this.channels.values()).filter(c => c.platform === platform);
+  }
+
   getAll(): IChannel[] {
     return Array.from(this.channels.values());
   }

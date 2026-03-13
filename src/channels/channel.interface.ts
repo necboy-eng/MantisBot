@@ -20,6 +20,11 @@ export interface ChannelContext {
   userId?: string;
   platform: string;
   channel?: string;
+  agentProfile?: string;       // 实例指定的 Agent 人格
+  agentTeam?: string;          // 实例指定的 Agent team ID
+  workingDirectory?: string;   // 实例工作主目录
+  feishuInstanceId?: string;   // 飞书实例 ID（工具层路由用）
+  attachments?: FileAttachment[];  // 消息附件（飞书等渠道传递）
   [key: string]: unknown;
 }
 

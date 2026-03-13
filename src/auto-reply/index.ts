@@ -172,15 +172,22 @@ export class AutoReply {
 
   /**
    * 流式处理消息（支持飞书等平台的流式输出）
+   *
+   * @param content 消息内容
+   * @param context 完整的 ChannelContext，包含平台信息、用户信息、实例配置等
    */
   async *handleMessageStream(
     content: string,
-    context: { platform: string; chatId: string; userId: string; attachments?: import('../types.js').FileAttachment[] }
+    context: ChannelContext
   ): StreamGenerator {
     // Check for plugin commands first
     if (content.startsWith('/') && content.includes(':')) {
       // Plugin commands don't support streaming, return as regular message
-      const result = await this.handleMessage(content, context);
+      const result = await this.handleMessage(content, {
+        platform: context.platform,
+        chatId: context.chatId,
+        userId: context.userId ?? '',
+      });
       if (result) {
         yield { type: 'text', content: result.response };
         yield { type: 'done', files: result.files };
@@ -194,7 +201,13 @@ export class AutoReply {
       const command = this.commandRegistry.get(parsed.command);
       if (command) {
         // Commands don't support streaming
-        const response = await command.handler(parsed.args, context);
+        // 构建 CommandContext（userId 保证非空）
+        const cmdContext = {
+          platform: context.platform,
+          chatId: context.chatId,
+          userId: context.userId ?? '',
+        };
+        const response = await command.handler(parsed.args, cmdContext);
         yield { type: 'text', content: response };
         yield { type: 'done' };
         return;
@@ -209,17 +222,12 @@ export class AutoReply {
       userId: context.userId,
       platform: context.platform,
       timestamp: Date.now(),
+      // 从 context 中提取 attachments（如果存在）
       attachments: context.attachments,
     };
 
-    // Build ChannelContext
-    const channelContext: ChannelContext = {
-      platform: context.platform,
-      chatId: context.chatId,
-      userId: context.userId,
-    };
-
-    // Handle as streaming message
-    yield* this.dispatcher.dispatchStream(message, channelContext);
+    // 直接透传 context，而非重新构建
+    // 这样保留了 agentProfile、agentTeam、workingDirectory、feishuInstanceId 等扩展字段
+    yield* this.dispatcher.dispatchStream(message, context);
   }
 }

@@ -299,11 +299,15 @@ export async function createHTTPServer(options: HTTPServerOptions) {
   app.get('/api/sessions', (_, res) => {
     const sessions = options.sessionManager.listSessions();
     res.json(sessions.map(s => {
-      // 检测会话的 platform（从第一条消息的 metadata 中获取）
+      // 检测会话的 platform 和 feishuInstanceId（从第一条消息的 metadata 中获取）
       let platform = 'web'; // 默认
+      let feishuInstanceId: string | undefined;
       const firstUserMessage = s.messages.find(m => m.role === 'user');
       if (firstUserMessage?.metadata?.platform) {
         platform = firstUserMessage.metadata.platform as string;
+      }
+      if (firstUserMessage?.metadata?.feishuInstanceId) {
+        feishuInstanceId = firstUserMessage.metadata.feishuInstanceId as string;
       }
 
       // 智能标题生成：如果没有 name，使用第一条用户消息的前 30 个字符
@@ -320,7 +324,8 @@ export async function createHTTPServer(options: HTTPServerOptions) {
         updatedAt: s.updatedAt,
         messageCount: s.messages.length,
         starred: s.starred,
-        platform, // 新增：渠道平台标识
+        platform, // 渠道平台标识
+        feishuInstanceId, // 飞书实例 ID（仅飞书渠道有效）
       };
     }));
   });
@@ -1212,7 +1217,7 @@ export async function createHTTPServer(options: HTTPServerOptions) {
   // Reload config from disk
   app.post('/api/config/reload', async (_, res) => {
     try {
-      loadConfig();
+      config = loadConfig(); // 同时更新局部闭包变量，确保所有路由读到最新配置
       res.json({ success: true, message: 'Configuration reloaded from disk' });
     } catch (error) {
       console.error('[HTTPServer] Config reload error:', error);
@@ -2614,8 +2619,10 @@ export async function createHTTPServer(options: HTTPServerOptions) {
       const config = getConfig();
       const channelsConfig = config.channels || {};
 
-      res.json({
-        channels: channelDefinitions.map(def => {
+      // 非飞书渠道按原有方式返回
+      const nonFeishuChannels = channelDefinitions
+        .filter(def => def.id !== 'feishu')
+        .map(def => {
           const channelConfig = channelsConfig[def.id as keyof typeof channelsConfig];
           return {
             id: def.id,
@@ -2626,8 +2633,30 @@ export async function createHTTPServer(options: HTTPServerOptions) {
             enabled: channelConfig?.enabled ?? (def.id === 'httpWs'),
             config: channelConfig || {},
           };
-        }),
-      });
+        });
+
+      // 飞书实例单独展开（每个实例作为一条独立记录）
+      const feishuDef = channelDefinitions.find(d => d.id === 'feishu')!;
+      const feishuInstances = (config.feishuInstances || []).map(inst => ({
+        id: `feishu:${inst.id}`,
+        name: `Feishu (${inst.id})`,
+        nameZh: `飞书 (${inst.id})`,
+        icon: feishuDef.icon,
+        color: feishuDef.color,
+        enabled: inst.enabled ?? true,
+        config: {
+          instanceId: inst.id,
+          appId: inst.appId,
+          appSecret: inst.appSecret,
+          verificationToken: inst.verificationToken,
+          encryptKey: inst.encryptKey,
+          profile: inst.profile,
+          team: inst.team,
+          workingDirectory: inst.workingDirectory,
+        },
+      }));
+
+      res.json({ channels: [...nonFeishuChannels, ...feishuInstances] });
     } catch (error) {
       console.error('[HTTPServer] Channels error:', error);
       res.status(500).json({ error: 'Failed to get channels' });
@@ -2666,6 +2695,53 @@ export async function createHTTPServer(options: HTTPServerOptions) {
   app.post('/api/channels', (req, res) => {
     try {
       const { id, enabled, config: channelConfigInput } = req.body;
+
+      // 飞书多实例：id 为 'feishu'（新建）或 'feishu:xxx'（编辑）
+      if (id === 'feishu' || id?.startsWith('feishu:')) {
+        const instanceId = id.startsWith('feishu:') ? id.slice('feishu:'.length) : channelConfigInput?.instanceId;
+        if (!instanceId) {
+          return res.status(400).json({ error: 'Missing instanceId for Feishu instance' });
+        }
+        if (!channelConfigInput?.appId) {
+          return res.status(400).json({ error: 'Missing required field: App ID' });
+        }
+        if (!channelConfigInput?.appSecret) {
+          return res.status(400).json({ error: 'Missing required field: App Secret' });
+        }
+
+        let currentConfig = getConfig();
+        const instances: any[] = [...(currentConfig.feishuInstances || [])];
+        const idx = instances.findIndex(i => i.id === instanceId);
+        const newInstance = {
+          id: instanceId,
+          enabled: enabled ?? true,
+          appId: channelConfigInput.appId,
+          appSecret: channelConfigInput.appSecret,
+          verificationToken: channelConfigInput.verificationToken,
+          encryptKey: channelConfigInput.encryptKey,
+          profile: channelConfigInput.profile || 'default',
+          team: channelConfigInput.team,
+          workingDirectory: channelConfigInput.workingDirectory,
+        };
+        if (idx >= 0) {
+          instances[idx] = { ...instances[idx], ...newInstance };
+        } else {
+          instances.push(newInstance);
+        }
+        currentConfig = { ...currentConfig, feishuInstances: instances };
+        saveConfig(currentConfig);
+
+        const feishuDef = channelDefinitions.find(d => d.id === 'feishu')!;
+        return res.json({
+          id: `feishu:${instanceId}`,
+          name: `Feishu (${instanceId})`,
+          nameZh: `飞书 (${instanceId})`,
+          icon: feishuDef.icon,
+          color: feishuDef.color,
+          enabled: enabled ?? true,
+          config: newInstance,
+        });
+      }
 
       const def = getChannelDefinition(id);
       if (!def) {
@@ -2719,6 +2795,16 @@ export async function createHTTPServer(options: HTTPServerOptions) {
         return res.status(400).json({ error: 'Cannot delete httpWs channel' });
       }
 
+      // 飞书多实例删除
+      if (id.startsWith('feishu:')) {
+        const instanceId = id.slice('feishu:'.length);
+        let currentConfig = getConfig();
+        const instances = (currentConfig.feishuInstances || []).filter((i: any) => i.id !== instanceId);
+        currentConfig = { ...currentConfig, feishuInstances: instances };
+        saveConfig(currentConfig);
+        return res.status(204).send();
+      }
+
       const def = getChannelDefinition(id);
       if (!def) {
         return res.status(404).json({ error: 'Channel not found' });
@@ -2750,6 +2836,30 @@ export async function createHTTPServer(options: HTTPServerOptions) {
     try {
       const { id } = req.params;
       const { enabled } = req.body;
+
+      // 飞书多实例：仅更新配置，热加载由 initializer 处理
+      if (id.startsWith('feishu:')) {
+        const instanceId = id.slice('feishu:'.length);
+        let currentConfig = getConfig();
+        const instances: any[] = [...(currentConfig.feishuInstances || [])];
+        const idx = instances.findIndex(i => i.id === instanceId);
+        if (idx < 0) {
+          return res.status(404).json({ error: `Feishu instance '${instanceId}' not found` });
+        }
+        instances[idx] = { ...instances[idx], enabled };
+        currentConfig = { ...currentConfig, feishuInstances: instances };
+        saveConfig(currentConfig);
+
+        // 热启停
+        let result;
+        if (enabled) {
+          result = await hotStartChannel(id);
+        } else {
+          result = await hotStopChannel(id);
+        }
+
+        return res.json({ id, enabled, message: result.message });
+      }
 
       const def = getChannelDefinition(id);
       if (!def) {
@@ -2785,21 +2895,27 @@ export async function createHTTPServer(options: HTTPServerOptions) {
     try {
       const { id } = req.params;
 
-      const def = getChannelDefinition(id);
-      if (!def) {
-        return res.status(404).json({ error: 'Channel not found' });
-      }
-
       // 根据渠道类型执行不同的测试逻辑
       let success = false;
       let message = '';
 
-      if (id === 'feishu') {
-        // 飞书连接测试
-        const config = getConfig();
-        const feishuConfig = config.channels?.feishu;
+      if (id === 'feishu' || id.startsWith('feishu:')) {
+        // 飞书连接测试（支持单实例和多实例）
+        const cfg = getConfig();
+        let appId: string | undefined;
+        let appSecret: string | undefined;
 
-        if (!feishuConfig?.enabled || !feishuConfig?.appId || !feishuConfig?.appSecret) {
+        if (id.startsWith('feishu:')) {
+          const instanceId = id.slice('feishu:'.length);
+          const inst = (cfg.feishuInstances || []).find((i: any) => i.id === instanceId);
+          appId = inst?.appId;
+          appSecret = inst?.appSecret;
+        } else {
+          appId = cfg.channels?.feishu?.appId;
+          appSecret = cfg.channels?.feishu?.appSecret;
+        }
+
+        if (!appId || !appSecret) {
           message = 'Feishu is not configured or disabled';
         } else {
           try {
@@ -2807,10 +2923,7 @@ export async function createHTTPServer(options: HTTPServerOptions) {
             const response = await fetch('https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                app_id: feishuConfig.appId,
-                app_secret: feishuConfig.appSecret,
-              }),
+              body: JSON.stringify({ app_id: appId, app_secret: appSecret }),
             });
             const data = await response.json() as any;
 
@@ -2824,37 +2937,44 @@ export async function createHTTPServer(options: HTTPServerOptions) {
             message = `Connection failed: ${err.message}`;
           }
         }
-      } else if (id === 'slack') {
-        // Slack 连接测试
-        const config = getConfig();
-        const slackConfig = config.channels?.slack;
-
-        if (!slackConfig?.enabled || !slackConfig?.botToken) {
-          message = 'Slack is not configured or disabled';
-        } else {
-          try {
-            const response = await fetch('https://slack.com/api/auth.test', {
-              headers: { 'Authorization': `Bearer ${slackConfig.botToken}` },
-            });
-            const data = await response.json() as any;
-
-            if (data.ok) {
-              success = true;
-              message = `Connected as ${data.user}`;
-            } else {
-              message = `Slack API error: ${data.error}`;
-            }
-          } catch (err: any) {
-            message = `Connection failed: ${err.message}`;
-          }
-        }
-      } else if (id === 'httpWs') {
-        // Web UI 总是可用的
-        success = true;
-        message = 'Web UI is always available';
       } else {
-        // 其他渠道暂不支持测试
-        message = `Connection test not implemented for ${def.name}`;
+        const def = getChannelDefinition(id);
+        if (!def) {
+          return res.status(404).json({ error: 'Channel not found' });
+        }
+
+        if (id === 'slack') {
+          // Slack 连接测试
+          const cfg = getConfig();
+          const slackConfig = cfg.channels?.slack;
+
+          if (!slackConfig?.enabled || !slackConfig?.botToken) {
+            message = 'Slack is not configured or disabled';
+          } else {
+            try {
+              const response = await fetch('https://slack.com/api/auth.test', {
+                headers: { 'Authorization': `Bearer ${slackConfig.botToken}` },
+              });
+              const data = await response.json() as any;
+
+              if (data.ok) {
+                success = true;
+                message = `Connected as ${data.user}`;
+              } else {
+                message = `Slack API error: ${data.error}`;
+              }
+            } catch (err: any) {
+              message = `Connection failed: ${err.message}`;
+            }
+          }
+        } else if (id === 'httpWs') {
+          // Web UI 总是可用的
+          success = true;
+          message = 'Web UI is always available';
+        } else {
+          // 其他渠道暂不支持测试
+          message = `Connection test not implemented for ${def.name}`;
+        }
       }
 
       res.json({

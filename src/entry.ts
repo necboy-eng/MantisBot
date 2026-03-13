@@ -11,6 +11,7 @@ import {
   stopChannels,
   getChannelRegistry
 } from './channels/index.js';
+import type { ChannelContext } from './channels/channel.interface.js';
 import { AutoReply } from './auto-reply/index.js';
 import { SessionManager } from './session/manager.js';
 import { MemoryManager } from './memory/manager.js';
@@ -249,8 +250,11 @@ export async function main(): Promise<void> {
     toolRegistry,
     skillsLoader,
     pluginLoader,
-    async (message) => {
-      const channel = getChannelRegistry().getByPlatform(message.platform);
+    async (message, context?: ChannelContext) => {
+      // 优先用 message.channel 精确路由，回退到 getByPlatform
+      const channel = message.channel
+        ? getChannelRegistry().get(message.channel)
+        : getChannelRegistry().getByPlatform(message.platform);
 
       if (!channel) {
         return;
@@ -264,11 +268,19 @@ export async function main(): Promise<void> {
         console.log(`[Entry] Using streaming for platform: ${message.platform}`);
         try {
           const generator = autoReply.handleMessageStream(message.content, {
-            platform: message.platform,
-            chatId: message.chatId,
-            userId: message.userId || '',
-            attachments: message.attachments,
-          });
+            platform: context?.platform ?? message.platform,
+            chatId: context?.chatId ?? message.chatId,
+            userId: context?.userId ?? message.userId ?? '',
+            attachments: context?.attachments ?? message.attachments,
+            // 传递多实例相关的额外字段（Task 7 会完善 handleMessageStream 对这些字段的处理）
+            ...(context && {
+              agentProfile: context.agentProfile,
+              agentTeam: context.agentTeam,
+              workingDirectory: context.workingDirectory,
+              feishuInstanceId: context.feishuInstanceId,
+              channel: context.channel,
+            }),
+          } as any);
 
           // 调用 channel 的流式发送方法
           for await (const _ of (channel as any).sendWithStream(

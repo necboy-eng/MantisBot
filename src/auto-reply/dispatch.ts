@@ -70,17 +70,28 @@ export class MessageDispatcher {
   /**
    * 解析消息中的团队触发信息，返回 { team, cleanedContent }
    *
-   * 三种触发方式（按优先级）：
-   * 1. UI 显式指定 teamId（message.teamId 字段）
-   * 2. /command 触发（消息以 "/xxx " 或 "/xxx\n" 开头）
-   * 3. AI 自动关键词检测
+   * 四种触发方式（按优先级）：
+   * 1. 实例级指定 team（context.agentTeam 字段，来自飞书多实例配置）
+   * 2. UI 显式指定 teamId（message.teamId 字段）
+   * 3. /command 触发（消息以 "/xxx " 或 "/xxx\n" 开头）
+   * 4. AI 自动关键词检测
    */
-  private resolveTeam(message: ChannelMessage): { team: AgentTeam | null; content: string } {
+  private resolveTeam(message: ChannelMessage, context: ChannelContext): { team: AgentTeam | null; content: string } {
     const config = getConfig();
     const teams: AgentTeam[] = config.agentTeams || [];
     let content = message.content;
 
-    // 1. UI 显式指定 teamId
+    // 1. 实例级指定 team（多实例支持）
+    const instanceTeamId = context.agentTeam;
+    if (instanceTeamId) {
+      const team = teams.find(t => t.enabled && t.id === instanceTeamId) ?? null;
+      if (team) {
+        console.log(`[Dispatch] Using instance-level team: ${team.name} (id: ${instanceTeamId})`);
+        return { team, content };
+      }
+    }
+
+    // 2. UI 显式指定 teamId
     const explicitTeamId = (message as any).teamId as string | undefined;
     if (explicitTeamId) {
       const team = teams.find(t => t.enabled && t.id === explicitTeamId) ?? null;
@@ -90,19 +101,19 @@ export class MessageDispatcher {
       }
     }
 
-    // 2. /command 触发：以 "/xxx" 开头（后跟空格、换行或直接结束）
+    // 3. /command 触发：以 "/xxx" 开头（后跟空格、换行或直接结束）
     const cmdMatch = content.match(/^\/([a-zA-Z0-9_-]+)(?:\s+(.*))?$/s);
     if (cmdMatch) {
       const command = cmdMatch[1];
       const team = findTeamByCommand(command, teams);
       if (team) {
-        content = cmdMatch[2]?.trim() || content;
+        content = cmdMatch[2]?.trim() ?? '';
         console.log(`[Dispatch] Team triggered by command /${command}: ${team.name}`);
         return { team, content };
       }
     }
 
-    // 3. AI 自动关键词检测
+    // 4. AI 自动关键词检测
     const detectedTeam = detectTeamFromMessage(content, teams);
     if (detectedTeam) {
       console.log(`[Dispatch] Team auto-detected from keywords: ${detectedTeam.name}`);
@@ -148,22 +159,19 @@ export class MessageDispatcher {
         );
       }
 
-      // 解析团队触发（三种方式）
-      const { team: activeTeam, content } = this.resolveTeam(message);
+      // 解析团队触发（优先使用实例级配置，其次走命令/关键词检测）
+      const { team: activeTeam, content } = this.resolveTeam(message, context);
 
-      // 如果激活了团队，将团队信息注入 Runner options（通过 setOptions 或直接在 run 时传）
+      // dispatch() 不支持多实例 runner，effectiveRunner 始终为全局 agentRunner
+      // 统一使用 effectiveRunner 变量，便于未来扩展
+      const effectiveRunner = this.agentRunner;
+
+      // 如果激活了团队，将团队信息注入 effectiveRunner（UnifiedAgentRunner 支持动态 options）
+      if (typeof (effectiveRunner as any).setActiveTeam === 'function') {
+        (effectiveRunner as any).setActiveTeam(activeTeam ?? null);
+      }
       if (activeTeam) {
-        // 将 activeTeam 注入 runner（UnifiedAgentRunner 支持动态 options）
-        const runner = this.agentRunner as any;
-        if (typeof runner.setActiveTeam === 'function') {
-          runner.setActiveTeam(activeTeam);
-        }
         console.log(`[Dispatch] Active team: ${activeTeam.name} (${Object.keys(activeTeam.agents).length} subagents)`);
-      } else {
-        const runner = this.agentRunner as any;
-        if (typeof runner.setActiveTeam === 'function') {
-          runner.setActiveTeam(null);
-        }
       }
 
       // Search relevant memories
@@ -197,7 +205,7 @@ ${content}
       }
 
       // Run agent
-      const result = await this.agentRunner.run(prompt, history);
+      const result = await effectiveRunner.run(prompt, history);
 
       // Trigger agent.end hook for self-improving
       try {
@@ -220,6 +228,7 @@ ${content}
           platform: message.platform,
           chatId: message.chatId,
           userId: message.userId,
+          feishuInstanceId: context.feishuInstanceId, // 飞书实例 ID
         },
       });
       const assistantMsg = this.sessionManager.addMessage(sessionId, {
@@ -272,20 +281,11 @@ ${content}
       const truncated = truncateHistory(rawHistory, historyBudget);
       const history = truncated as Array<{ role: 'user' | 'assistant' | 'system' | 'tool'; content: string }>;
 
-      // 解析团队触发
-      const { team: activeTeam, content } = this.resolveTeam(message);
+      // 解析团队触发（优先使用实例级配置，其次走命令/关键词检测）
+      const { team: activeTeam, content } = this.resolveTeam(message, context);
 
       if (activeTeam) {
-        const runner = this.agentRunner as any;
-        if (typeof runner.setActiveTeam === 'function') {
-          runner.setActiveTeam(activeTeam);
-        }
         console.log(`[DispatchStream] Active team: ${activeTeam.name}`);
-      } else {
-        const runner = this.agentRunner as any;
-        if (typeof runner.setActiveTeam === 'function') {
-          runner.setActiveTeam(null);
-        }
       }
 
       // 设置用户上下文（用于工具执行时获取用户身份，如飞书的 senderOpenId）
@@ -332,6 +332,11 @@ ${content}
         (a) => a.mimeType?.startsWith('image/')
       );
 
+      // 确定本次请求的工作目录（优先使用实例级配置，避免多实例竞态）
+      const instanceCwd = context.workingDirectory
+        ? path.join(context.workingDirectory, 'files')
+        : workDirManager.getCurrentWorkDir();
+
       // 是否需要临时视觉 runner（图片存在且当前模型不支持视觉）
       let visionRunner: UnifiedAgentRunner | null = null;
       let visionSwitchNotice = '';
@@ -351,12 +356,11 @@ ${content}
 
           if (visionModel) {
             console.log(`[DispatchStream] Vision routing: switching from ${currentModelName} to ${visionModel.name} for image analysis`);
-            const cwd = workDirManager.getCurrentWorkDir();
             visionRunner = new UnifiedAgentRunner((this.agentRunner as any).toolRegistry, {
               model: visionModel.name,
               maxIterations: 0,
               approvalMode: session.approvalMode || 'dangerous',
-              cwd,
+              cwd: instanceCwd,
             });
             visionSwitchNotice = `🔍 已自动切换到 **${visionModel.name}** 进行图像分析`;
             effectiveRunner = visionRunner;
@@ -427,6 +431,28 @@ ${content}
         }
       }
 
+      // ── 实例级 Runner：当 context 携带 workingDirectory 或 agentProfile 时 ──
+      // 如果当前 effectiveRunner 仍是全局默认 runner，但 context 带有实例级配置，
+      // 则创建一个持有独立 cwd 的临时 runner，避免多实例并发竞态（工具执行路径隔离）。
+      // 注意：agentProfile 目前由 ClaudeAgentRunner 内部通过 ProfileLoader 加载，
+      // 未来可扩展 AgentRunnerOptions.profile 来支持实例级 profile 切换。
+      let instanceRunner: UnifiedAgentRunner | null = null;
+      if (effectiveRunner === this.agentRunner && context.workingDirectory) {
+        const existingOptions = (this.agentRunner as any).options || {};
+        instanceRunner = new UnifiedAgentRunner((this.agentRunner as any).toolRegistry, {
+          ...existingOptions,
+          cwd: instanceCwd,
+        });
+        effectiveRunner = instanceRunner;
+        console.log(`[DispatchStream] Created instance runner: cwd=${instanceCwd}${context.agentProfile ? `, profile hint=${context.agentProfile}` : ''}`);
+      }
+
+      // effectiveRunner 已最终确定（可能是 visionRunner、instanceRunner 或全局 runner）
+      // 在此统一设置 activeTeam，避免多实例并发竞态（不再操作全局 this.agentRunner）
+      if (typeof (effectiveRunner as any).setActiveTeam === 'function') {
+        (effectiveRunner as any).setActiveTeam(activeTeam ?? null);
+      }
+
       // Add user message to session
       this.sessionManager.addMessage(sessionId, {
         role: 'user',
@@ -436,6 +462,7 @@ ${content}
           chatId: message.chatId,
           userId: message.userId,
           attachments: message.attachments?.map(a => ({ name: a.name, mimeType: a.mimeType })),
+          feishuInstanceId: context.feishuInstanceId, // 飞书实例 ID
         },
       });
 
@@ -488,6 +515,11 @@ ${content}
         if (visionRunner) {
           visionRunner.dispose?.();
           console.log('[DispatchStream] Vision runner disposed');
+        }
+        // 实例级 runner 用完即释放（避免内存泄漏）
+        if (instanceRunner) {
+          instanceRunner.dispose?.();
+          console.log('[DispatchStream] Instance runner disposed');
         }
       }
 

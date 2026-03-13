@@ -82,6 +82,7 @@ export function getDefaultConfig(): Config {
         enabled: true,
       },
     },
+    feishuInstances: [],
     plugins: [
       { name: 'document', enabled: true },
       { name: 'logger', enabled: true },

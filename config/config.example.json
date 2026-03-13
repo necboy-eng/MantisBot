@@ -29,6 +29,25 @@
       "enabled": true
     }
   },
+  "feishuInstances": [
+    {
+      "id": "hr-bot",
+      "enabled": true,
+      "appId": "cli_xxx",
+      "appSecret": "xxx",
+      "workingDirectory": "./data/hr-bot",
+      "profile": "hr-assistant",
+      "team": "hr-team"
+    },
+    {
+      "id": "dev-bot",
+      "enabled": true,
+      "appId": "cli_yyy",
+      "appSecret": "yyy",
+      "workingDirectory": "./data/dev-bot",
+      "profile": "developer"
+    }
+  ],
   "plugins": [
     { "name": "document", "enabled": true },
     { "name": "logger", "enabled": true },

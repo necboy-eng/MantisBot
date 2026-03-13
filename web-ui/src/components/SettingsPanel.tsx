@@ -42,6 +42,7 @@ export function SettingsPanel({ isOpen, onClose }: SettingsPanelProps) {
   const [installModalOpen, setInstallModalOpen] = useState(false);
   const [reloadingConfig, setReloadingConfig] = useState(false);
   const [skillEditorOpen, setSkillEditorOpen] = useState(false);
+  const [refreshKey, setRefreshKey] = useState(0); // reload 后递增，强制子组件重新挂载
 
   // Fetch skills on mount
   useEffect(() => {
@@ -170,6 +171,8 @@ export function SettingsPanel({ isOpen, onClose }: SettingsPanelProps) {
       await authFetch('/api/config/reload', { method: 'POST' });
       // 服务端配置已从磁盘重载，清空前端所有缓存确保下次读取拿到最新数据
       invalidateAllCache();
+      // 递增 refreshKey，触发所有子组件重新挂载并重新拉取数据
+      setRefreshKey(k => k + 1);
     } catch (err) {
       console.error('Failed to reload config:', err);
     } finally {
@@ -335,6 +338,7 @@ export function SettingsPanel({ isOpen, onClose }: SettingsPanelProps) {
         {/* Content Area */}
         {activeTab === 'skills' ? (
           <SkillManagementSection
+            key={refreshKey}
             skills={skills}
             searchQuery={searchQuery}
             loading={loading}
@@ -351,30 +355,31 @@ export function SettingsPanel({ isOpen, onClose }: SettingsPanelProps) {
             onEditorChange={setSkillEditorOpen}
           />
         ) : activeTab === 'models' ? (
-          <ModelConfigSection />
+          <ModelConfigSection key={refreshKey} />
         ) : activeTab === 'profiles' ? (
           <ProfileManagementSection
+            key={refreshKey}
             activeProfile={activeProfile}
             onProfileChange={setActiveProfile}
           />
         ) : activeTab === 'paths' ? (
-          <AllowedPathsSection />
+          <AllowedPathsSection key={refreshKey} />
         ) : activeTab === 'channels' ? (
-          <ChannelManagementSection isOpen={activeTab === 'channels'} />
+          <ChannelManagementSection key={refreshKey} isOpen={activeTab === 'channels'} />
         ) : activeTab === 'email' ? (
-          <EmailConfigSection />
+          <EmailConfigSection key={refreshKey} />
         ) : activeTab === 'auth' ? (
-          <AuthSettingsSection />
+          <AuthSettingsSection key={refreshKey} />
         ) : activeTab === 'firecrawl' ? (
-          <FirecrawlSettingsSection />
+          <FirecrawlSettingsSection key={refreshKey} />
         ) : activeTab === 'teams' ? (
-          <AgentTeamsSection />
+          <AgentTeamsSection key={refreshKey} />
         ) : activeTab === 'plugins' ? (
-          <PluginManagementSection />
+          <PluginManagementSection key={refreshKey} />
         ) : activeTab === 'storage' ? (
-          <StorageManagementSection />
+          <StorageManagementSection key={refreshKey} />
         ) : (
-          <EvolutionSection />
+          <EvolutionSection key={refreshKey} />
         )}
       </div>
 

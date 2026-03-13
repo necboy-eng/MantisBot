@@ -2,15 +2,35 @@
 
 import * as lark from '@larksuiteoapi/node-sdk';
 import { getConfig } from '../../../config/loader.js';
+import type { FeishuInstanceConfig, FeishuConfig } from '../../../config/schema.js';
 import { getUATStore } from './uat-store.js';
 
 /**
  * 飞书 SDK 客户端管理器
  * 管理 Bot 客户端和用户客户端（UAT）
+ * 支持通过构造函数传入实例配置（多实例模式）或使用全局配置（单实例兼容模式）
  */
-class FeishuClientManager {
+export class FeishuClientManager {
   private botClient: lark.Client | null = null;
   private userClients: Map<string, lark.Client> = new Map();
+  private instanceConfig: FeishuInstanceConfig | null = null;
+
+  constructor(config?: FeishuInstanceConfig) {
+    if (config) {
+      this.instanceConfig = config;
+    }
+  }
+
+  /**
+   * 获取有效的飞书配置（优先使用实例配置，回退到全局配置）
+   */
+  private getFeishuConfig(): FeishuInstanceConfig | FeishuConfig | undefined {
+    if (this.instanceConfig) {
+      return this.instanceConfig;
+    }
+    const config = getConfig();
+    return (config.channels as any)?.feishu;
+  }
 
   /**
    * 获取 Bot 客户端（单例）
@@ -20,8 +40,7 @@ class FeishuClientManager {
       return this.botClient;
     }
 
-    const config = getConfig();
-    const feishuConfig = (config.channels as any)?.feishu;
+    const feishuConfig = this.getFeishuConfig();
 
     if (!feishuConfig?.enabled) {
       throw new Error('飞书集成未启用');
@@ -31,7 +50,8 @@ class FeishuClientManager {
       throw new Error('飞书 appId 或 appSecret 未配置');
     }
 
-    console.log('[FeishuClient] Creating Bot client');
+    const instanceId = this.instanceConfig?.id ?? 'default';
+    console.log(`[FeishuClient] Creating Bot client (instance=${instanceId})`);
 
     this.botClient = new lark.Client({
       appId: feishuConfig.appId,
@@ -49,11 +69,14 @@ class FeishuClientManager {
    * 优先从 context 获取 userId
    */
   async getUserClient(userId?: string): Promise<lark.Client> {
-    const config = getConfig();
-    const feishuConfig = (config.channels as any)?.feishu;
+    const feishuConfig = this.getFeishuConfig();
 
     if (!feishuConfig?.enabled) {
       throw new Error('飞书集成未启用');
+    }
+
+    if (!feishuConfig?.appId || !feishuConfig?.appSecret) {
+      throw new Error('飞书 appId 或 appSecret 未配置');
     }
 
     // 如果没有提供 userId，使用 Bot 客户端
@@ -99,11 +122,9 @@ class FeishuClientManager {
   /**
    * 解析域名
    */
-  private resolveDomain(domain?: string): any {
-    if (!domain || domain === 'feishu') return lark.Domain.Feishu;
+  private resolveDomain(domain?: 'feishu' | 'lark'): any {
     if (domain === 'lark') return lark.Domain.Lark;
-    // 自定义域名（移除末尾斜杠）
-    return domain?.replace(/\/+$/, '') || lark.Domain.Feishu;
+    return lark.Domain.Feishu;
   }
 
   /**
@@ -127,33 +148,88 @@ class FeishuClientManager {
 // 单例
 let feishuClientManager: FeishuClientManager | null = null;
 
+// ── 多实例支持 ──────────────────────────────────────────────────────────────
+
 /**
- * 获取 Bot 客户端
+ * 实例注册表：instanceId -> FeishuClientManager
  */
-export async function getFeishuBotClient(): Promise<lark.Client> {
-  if (!feishuClientManager) {
-    feishuClientManager = new FeishuClientManager();
-  }
-  return feishuClientManager.getBotClient();
+const instanceManagers: Map<string, FeishuClientManager> = new Map();
+
+/**
+ * 注册飞书实例的 ClientManager（供 initializer.ts 调用）
+ * @param instanceId 实例 ID（如 "default"、"hr-bot"）
+ * @param config 实例配置
+ */
+export function registerFeishuInstance(instanceId: string, config: FeishuInstanceConfig): void {
+  const manager = new FeishuClientManager(config);
+  instanceManagers.set(instanceId, manager);
+  console.log(`[FeishuClientManager] Registered instance: ${instanceId}`);
 }
 
 /**
- * 获取用户客户端（自动切换 Bot/User）
- * @param userId 用户 ID（可选，不提供则使用 Bot 客户端）
+ * 注销飞书实例的 ClientManager（供 hotStopChannel 调用）
+ * @param instanceId 实例 ID
  */
-export async function getFeishuClient(userId?: string): Promise<lark.Client> {
+export function unregisterFeishuInstance(instanceId: string): void {
+  instanceManagers.delete(instanceId);
+  console.log(`[FeishuClientManager] Unregistered instance: ${instanceId}`);
+}
+
+/**
+ * 辅助函数：获取默认管理器（兼容旧代码路径）
+ */
+function getDefaultManager(): FeishuClientManager {
+  // 检查注册表中是否有 'default' 实例
+  const defaultManager = instanceManagers.get('default');
+  if (defaultManager) {
+    return defaultManager;
+  }
+  // 最后回退：使用全局单例管理器（旧代码路径）
   if (!feishuClientManager) {
     feishuClientManager = new FeishuClientManager();
   }
-  return feishuClientManager.getUserClient(userId);
+  return feishuClientManager;
+}
+
+/**
+ * 按实例 ID 获取 FeishuClientManager
+ * @param instanceId 实例 ID，默认为 'default'
+ */
+export function getFeishuClientManagerByInstance(instanceId?: string): FeishuClientManager {
+  const id = instanceId ?? 'default';
+  const manager = instanceManagers.get(id);
+  if (manager) {
+    return manager;
+  }
+  // 回退到默认管理器（兼容旧代码）
+  return getDefaultManager();
+}
+
+// ── 导出函数 ─────────────────────────────────────────────────────────────────
+
+/**
+ * 获取 Bot 客户端
+ * @param instanceId 实例 ID（多实例时指定，默认为 'default'）
+ */
+export async function getFeishuBotClient(instanceId?: string): Promise<lark.Client> {
+  return getFeishuClientManagerByInstance(instanceId).getBotClient();
+}
+
+/**
+ * 获取用户客户端（自动切换 Bot/User，支持多实例）
+ * @param userId 用户 ID（可选，不提供则使用 Bot 客户端）
+ * @param instanceId 实例 ID（多实例时指定，默认为 'default'）
+ */
+export async function getFeishuClient(userId?: string, instanceId?: string): Promise<lark.Client> {
+  const manager = getFeishuClientManagerByInstance(instanceId);
+  return manager.getUserClient(userId);
 }
 
 /**
  * 清除用户客户端缓存
+ * @param userId 用户 ID
+ * @param instanceId 实例 ID（多实例时指定，默认为 'default'）
  */
-export function clearFeishuUserClient(userId: string): void {
-  if (!feishuClientManager) {
-    feishuClientManager = new FeishuClientManager();
-  }
-  feishuClientManager.clearUserClient(userId);
+export function clearFeishuUserClient(userId: string, instanceId?: string): void {
+  getFeishuClientManagerByInstance(instanceId).clearUserClient(userId);
 }
