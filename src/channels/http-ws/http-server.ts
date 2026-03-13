@@ -63,6 +63,7 @@ import { workDirManager } from '../../workdir/manager.js';
 import { PluginLoader } from '../../plugins/loader.js';
 import { createPluginRoutes } from './plugin-routes.js';
 import { UnifiedAgentRunner, type IAgentRunner } from '../../agents/unified-runner.js';
+import { isFallbackableError } from '../../agents/model-error-detector.js';
 
 // ─── 模块级常量 ───────────────────────────────────────────────────────────────
 /** 视觉图片注入：单张图片最大允许大小（2MB） */
@@ -71,6 +72,25 @@ const MAX_IMAGE_SIZE = 2 * 1024 * 1024;
 // 存储活动的 Agent Runner 实例（用于权限请求响应）
 // Key: sessionId, Value: agentRunner instance
 const activeAgentRunners = new Map<string, IAgentRunner>();
+
+/**
+ * Find the next available model for fallback
+ * Returns null if no other models are available
+ */
+function findNextModel(
+  config: any,
+  currentModel: string,
+  triedModels: Set<string>
+): { name: string; model: any } | null {
+  const models = config.models as any[];
+  for (const m of models) {
+    if (m.enabled === false) continue;
+    if (m.name === currentModel) continue;
+    if (triedModels.has(m.name)) continue;
+    return { name: m.name, model: m };
+  }
+  return null;
+}
 
 // Initialize evolution store
 evolutionStore.load().catch(err => {
@@ -716,7 +736,7 @@ export async function createHTTPServer(options: HTTPServerOptions) {
       // result 截断到 300 字符，避免大文件内容膨胀 sessions.json
       const MAX_TOOL_RESULT_LEN = 300;
       const MAX_THINKING_LEN    = 500;
-      const collectedToolStatus: import('../../types.js').PersistedToolStatus[] = [];
+      let collectedToolStatus: import('../../types.js').PersistedToolStatus[] = [];
       let   collectedThinking = '';
 
       // 记忆检索：在 streamRun 前搜索相关记忆，构建上下文提示词
@@ -877,129 +897,202 @@ export async function createHTTPServer(options: HTTPServerOptions) {
         (res as any).flush?.();
       }
 
-      for await (const chunk of effectiveRunner.streamRun(contextualMessage, history)) {
-        const chunkAny = chunk as any;
+      // Fallback loop: retry with next model on eligible errors
+      const triedModels = new Set<string>();
+      const initialModelName = effectiveRunner.modelName;
+      triedModels.add(initialModelName);
+      let currentRunner = effectiveRunner;
+      let currentModelName = initialModelName;
 
-        // 思考过程事件 - 流式输出思考内容
-        if (chunk.type === 'thinking' && chunk.content) {
-          collectedThinking += chunk.content;
-          console.log('[HTTPServer] Sending thinking event:', chunk.content.slice(0, 50));
-          res.write(`event: thinking\ndata: ${JSON.stringify({ content: chunk.content })}\n\n`);
-          (res as any).flush?.();
-        } else if (chunk.type === 'text' && chunk.content) {
-          fullContent += chunk.content;
-          console.log('[HTTPServer] Sending chunk event:', chunk.content.slice(0, 50));
-          res.write(`event: chunk\ndata: ${JSON.stringify({ content: chunk.content })}\n\n`);
-          (res as any).flush?.();
-        } else if (chunk.type === 'tool_use') {
-          console.log('[HTTPServer] Tool start:', chunk.tool, chunk.args);
-          // 收集工具调用 start 条目
-          collectedToolStatus.push({
-            tool: chunk.tool ?? '',
-            toolId: chunk.toolId,
-            status: 'start',
-            args: chunk.args,
-            timestamp: Date.now(),
-          });
-          res.write(`event: tool\ndata: ${JSON.stringify({
-            tool: chunk.tool,
-            toolId: chunk.toolId,
-            status: 'start',
-            args: chunk.args
-          })}\n\n`);
-          (res as any).flush?.();
-        } else if (chunk.type === 'tool_result') {
-          console.log('[HTTPServer] Tool end:', chunk.tool, 'Args:', chunk.args, 'Result type:', typeof chunk.result);
-          // 将 end 数据合并回对应的 start 条目（按 toolId 反向查找）
-          const startIdx = collectedToolStatus.slice().reverse().findIndex(
-            t => t.toolId === chunk.toolId && t.status === 'start'
-          );
-          if (startIdx >= 0) {
-            const realIdx = collectedToolStatus.length - 1 - startIdx;
-            const raw = chunk.result;
-            const truncated = typeof raw === 'string' && raw.length > MAX_TOOL_RESULT_LEN
-              ? raw.slice(0, MAX_TOOL_RESULT_LEN) + '…'
-              : raw;
-            collectedToolStatus[realIdx] = {
-              ...collectedToolStatus[realIdx],
-              status: 'end',
-              result: truncated,
-              isError: chunk.isError,
-            };
+      fallbackLoop: while (true) {
+        // Reset streaming state for each model attempt
+        fullContent = '';
+        collectedThinking = '';
+        collectedToolStatus = [];
+
+        try {
+          for await (const chunk of currentRunner.streamRun(contextualMessage, history)) {
+            const chunkAny = chunk as any;
+
+            // 思考过程事件 - 流式输出思考内容
+            if (chunk.type === 'thinking' && chunk.content) {
+              collectedThinking += chunk.content;
+              console.log('[HTTPServer] Sending thinking event:', chunk.content.slice(0, 50));
+              res.write(`event: thinking\ndata: ${JSON.stringify({ content: chunk.content })}\n\n`);
+              (res as any).flush?.();
+            } else if (chunk.type === 'text' && chunk.content) {
+              fullContent += chunk.content;
+              console.log('[HTTPServer] Sending chunk event:', chunk.content.slice(0, 50));
+              res.write(`event: chunk\ndata: ${JSON.stringify({ content: chunk.content })}\n\n`);
+              (res as any).flush?.();
+            } else if (chunk.type === 'tool_use') {
+              console.log('[HTTPServer] Tool start:', chunk.tool, chunk.args);
+              // 收集工具调用 start 条目
+              collectedToolStatus.push({
+                tool: chunk.tool ?? '',
+                toolId: chunk.toolId,
+                status: 'start',
+                args: chunk.args,
+                timestamp: Date.now(),
+              });
+              res.write(`event: tool\ndata: ${JSON.stringify({
+                tool: chunk.tool,
+                toolId: chunk.toolId,
+                status: 'start',
+                args: chunk.args
+              })}\n\n`);
+              (res as any).flush?.();
+            } else if (chunk.type === 'tool_result') {
+              console.log('[HTTPServer] Tool end:', chunk.tool, 'Args:', chunk.args, 'Result type:', typeof chunk.result);
+              // 将 end 数据合并回对应的 start 条目（按 toolId 反向查找）
+              const startIdx = collectedToolStatus.slice().reverse().findIndex(
+                t => t.toolId === chunk.toolId && t.status === 'start'
+              );
+              if (startIdx >= 0) {
+                const realIdx = collectedToolStatus.length - 1 - startIdx;
+                const raw = chunk.result;
+                const truncated = typeof raw === 'string' && raw.length > MAX_TOOL_RESULT_LEN
+                  ? raw.slice(0, MAX_TOOL_RESULT_LEN) + '…'
+                  : raw;
+                collectedToolStatus[realIdx] = {
+                  ...collectedToolStatus[realIdx],
+                  status: 'end',
+                  result: truncated,
+                  isError: chunk.isError,
+                };
+              }
+              res.write(`event: tool\ndata: ${JSON.stringify({
+                tool: chunk.tool,
+                toolId: chunk.toolId,
+                status: 'end',
+                args: chunk.args,
+                result: chunk.result,
+                isError: chunk.isError
+              })}\n\n`);
+              (res as any).flush?.();
+            } else if (chunk.type === 'permission') {
+              // 权限请求事件
+              const perm = chunkAny.permission;
+              console.log('[HTTPServer] Permission request:', perm);
+              res.write(`event: permission\ndata: ${JSON.stringify({
+                requestId: perm.requestId,
+                toolName: perm.toolName,
+                toolInput: perm.toolInput,
+                isDangerous: perm.isDangerous,
+                reason: perm.reason,
+              })}\n\n`);
+              (res as any).flush?.();
+            } else if (chunk.type === 'agent_invocation') {
+              // Subagent 调用事件（Agent Teams）
+              console.log('[HTTPServer] Sending agent event:', { agentName: chunk.agentName, phase: chunk.phase, task: (chunk.content || '').slice(0, 100) });
+              res.write(`event: agent\ndata: ${JSON.stringify({
+                agentName: chunk.agentName,
+                agentId: chunk.agentId,
+                phase: chunk.phase,
+                task: chunk.content,
+              })}\n\n`);
+              (res as any).flush?.();
+            } else if (chunk.type === 'error') {
+              // 错误事件
+              console.log('[HTTPServer] Error:', chunk.content);
+              res.write(`event: error\ndata: ${JSON.stringify({ content: chunk.content })}\n\n`);
+              (res as any).flush?.();
+            } else if (chunk.type === 'complete') {
+              // Save message to session
+              const assistantMessage = {
+                id: uuidv4(),
+                role: 'assistant' as const,
+                content: fullContent,
+                timestamp: Date.now(),
+                attachments: chunk.attachments,
+                // 持久化工具调用时间轴（result 已截断）和思考过程摘要
+                ...(collectedToolStatus.length > 0 && { toolStatus: collectedToolStatus }),
+                ...(collectedThinking && { thinking: collectedThinking.slice(0, MAX_THINKING_LEN) }),
+              };
+              session.messages.push(assistantMessage);
+
+              // 保存 Claude SDK 的 sessionId 到持久化 session（用于重启后恢复上下文）
+              const newClaudeSessionId = currentRunner.getSessionId?.();
+              if (newClaudeSessionId && newClaudeSessionId !== session.claudeSessionId) {
+                session.claudeSessionId = newClaudeSessionId;
+                console.log('[HTTPServer] Saved claudeSessionId to session:', newClaudeSessionId);
+              }
+
+              options.sessionManager.updateSession(session);
+
+              // ⚡ 发送 done 事件（标题已在用户提交消息时提前生成）
+              const doneData = {
+                messageId: assistantMessage.id,
+                attachments: chunk.attachments,
+                sessionName: session.name,
+                usage: chunk.usage,
+              };
+              console.log('[HTTPServer] Sending done event with attachments:', chunk.attachments?.length || 0);
+              res.write(`event: done\ndata: ${JSON.stringify(doneData)}\n\n`);
+
+              // 后台异步：检测用户偏好并生成演变提议（不阻塞响应）
+              detectPreferencesAndPropose(session.messages).catch(err => {
+                console.error('[HTTPServer] Failed to detect preferences (async):', err);
+              });
+
+              // Successfully completed, exit fallback loop
+              break fallbackLoop;
+            }
           }
-          res.write(`event: tool\ndata: ${JSON.stringify({
-            tool: chunk.tool,
-            toolId: chunk.toolId,
-            status: 'end',
-            args: chunk.args,
-            result: chunk.result,
-            isError: chunk.isError
-          })}\n\n`);
-          (res as any).flush?.();
-        } else if (chunk.type === 'permission') {
-          // 权限请求事件
-          const perm = chunkAny.permission;
-          console.log('[HTTPServer] Permission request:', perm);
-          res.write(`event: permission\ndata: ${JSON.stringify({
-            requestId: perm.requestId,
-            toolName: perm.toolName,
-            toolInput: perm.toolInput,
-            isDangerous: perm.isDangerous,
-            reason: perm.reason,
-          })}\n\n`);
-          (res as any).flush?.();
-        } else if (chunk.type === 'agent_invocation') {
-          // Subagent 调用事件（Agent Teams）
-          console.log('[HTTPServer] Sending agent event:', { agentName: chunk.agentName, phase: chunk.phase, task: (chunk.content || '').slice(0, 100) });
-          res.write(`event: agent\ndata: ${JSON.stringify({
-            agentName: chunk.agentName,
-            agentId: chunk.agentId,
-            phase: chunk.phase,
-            task: chunk.content,
-          })}\n\n`);
-          (res as any).flush?.();
-        } else if (chunk.type === 'error') {
-          // 错误事件
-          console.log('[HTTPServer] Error:', chunk.content);
-          res.write(`event: error\ndata: ${JSON.stringify({ content: chunk.content })}\n\n`);
-          (res as any).flush?.();
-        } else if (chunk.type === 'complete') {
-          // Save message to session
-          const assistantMessage = {
-            id: uuidv4(),
-            role: 'assistant' as const,
-            content: fullContent,
-            timestamp: Date.now(),
-            attachments: chunk.attachments,
-            // 持久化工具调用时间轴（result 已截断）和思考过程摘要
-            ...(collectedToolStatus.length > 0 && { toolStatus: collectedToolStatus }),
-            ...(collectedThinking && { thinking: collectedThinking.slice(0, MAX_THINKING_LEN) }),
-          };
-          session.messages.push(assistantMessage);
+        } catch (error: any) {
+          console.error('[HTTPServer] Stream error, checking for fallback:', error?.message || error);
 
-          // 保存 Claude SDK 的 sessionId 到持久化 session（用于重启后恢复上下文）
-          const newClaudeSessionId = agentRunner.getSessionId?.();
-          if (newClaudeSessionId && newClaudeSessionId !== session.claudeSessionId) {
-            session.claudeSessionId = newClaudeSessionId;
-            console.log('[HTTPServer] Saved claudeSessionId to session:', newClaudeSessionId);
+          // Check if error is fallback-eligible
+          if (!isFallbackableError(error)) {
+            // Not fallbackable, send error event and exit
+            console.log('[HTTPServer] Error is not fallbackable, sending error event');
+            res.write(`event: error\ndata: ${JSON.stringify({ content: error?.message || 'Unknown error' })}\n\n`);
+            (res as any).flush?.();
+            break fallbackLoop;
           }
 
-          options.sessionManager.updateSession(session);
+          // Find next available model
+          const nextModelInfo = findNextModel(config, currentModelName, triedModels);
 
-          // ⚡ 发送 done 事件（标题已在用户提交消息时提前生成）
-          const doneData = {
-            messageId: assistantMessage.id,
-            attachments: chunk.attachments,
-            sessionName: session.name,
-            usage: chunk.usage,
-          };
-          console.log('[HTTPServer] Sending done event with attachments:', chunk.attachments?.length || 0);
-          res.write(`event: done\ndata: ${JSON.stringify(doneData)}\n\n`);
+          if (!nextModelInfo) {
+            // All models exhausted
+            console.log('[HTTPServer] All models exhausted, sending error event');
+            res.write(`event: error\ndata: ${JSON.stringify({ content: '⚠️ 所有可用模型均无法响应，请稍后重试或检查模型配置。' })}\n\n`);
+            (res as any).flush?.();
+            break fallbackLoop;
+          }
 
-          // 后台异步：检测用户偏好并生成演变提议（不阻塞响应）
-          detectPreferencesAndPropose(session.messages).catch(err => {
-            console.error('[HTTPServer] Failed to detect preferences (async):', err);
+          // Send system event about model fallback
+          const fallbackNotice = `⚠️ ${currentModelName} 不可用，已自动切换至 ${nextModelInfo.name}`;
+          console.log('[HTTPServer] Model fallback:', currentModelName, '->', nextModelInfo.name);
+          res.write(`event: system\ndata: ${JSON.stringify({
+            subtype: 'model_fallback',
+            content: fallbackNotice,
+            from: currentModelName,
+            to: nextModelInfo.name
+          })}\n\n`);
+          (res as any).flush?.();
+
+          // Create new runner with fallback model
+          const fallbackRunner = new UnifiedAgentRunner(options.toolRegistry, {
+            model: nextModelInfo.name,
+            maxIterations: 0,
+            approvalMode: session.approvalMode || 'dangerous',
+            skillsLoader: options.skillsLoader,
+            cwd: workDirManager.getCurrentWorkDir(),
           });
+
+          // Update activeAgentRunners cache
+          activeAgentRunners.set(session.id, fallbackRunner);
+
+          // Update for next iteration
+          currentRunner = fallbackRunner;
+          currentModelName = nextModelInfo.name;
+          triedModels.add(currentModelName);
+
+          // Continue loop to retry with new model
+          console.log('[HTTPServer] Retrying with fallback model:', currentModelName);
+          continue;
         }
       }
 
