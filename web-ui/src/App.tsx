@@ -2006,6 +2006,32 @@ function App() {
                 });
               }
 
+              // 处理 system 事件（视觉切换、模型 fallback 通知）
+              if (currentEvent === 'system') {
+                console.log('[App] System event received:', parsed);
+                if (parsed.subtype === 'model_fallback') {
+                  // 1. Inline notice appended to current bubble
+                  setStreamMessages(prev => prev.map(msg =>
+                    msg.id === currentAssistantMsgId
+                      ? { ...msg, content: msg.content + `\n\n${parsed.content}` }
+                      : msg
+                  ));
+                  // 2. Warning Toast (amber, 5s)
+                  setToasts(prev => [...prev, {
+                    id: generateUUID(),
+                    content: parsed.content,
+                    type: 'warning',
+                  }]);
+                } else {
+                  // Other system notices (e.g., vision switch — no subtype)
+                  setStreamMessages(prev => prev.map(msg =>
+                    msg.id === currentAssistantMsgId
+                      ? { ...msg, content: msg.content + `\n\n${parsed.content}` }
+                      : msg
+                  ));
+                }
+              }
+
               // 处理 agent 事件（Agent Teams subagent 调用）
               if (currentEvent === 'agent') {
                 console.log('[App] Agent event received:', { phase: parsed.phase, agentName: parsed.agentName, agentId: parsed.agentId, task: parsed.task, currentAssistantMsgId });
