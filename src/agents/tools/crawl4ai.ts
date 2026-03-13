@@ -186,15 +186,19 @@ export const crawl4aiTool: Tool = {
     const scriptPath = path.join(tmpDir, `crawl4ai_runner_${Date.now()}.py`);
     await writeFile(scriptPath, CRAWL4AI_SCRIPT, 'utf-8');
 
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve) => {
       const paramsJson = JSON.stringify(cleanedParams);
 
       console.log(`[Crawl4AI] action=${action}, url=${params.url || (params.urls as string[])?.join(',')}`);
 
-      // 使用系统 Python，因为 crawl4ai 在 Docker 中是安装到系统 Python 的
-      // 注意：entrypoint.sh 会激活虚拟环境，但 crawl4ai 安装在系统 Python
-      // 所以必须显式指定 /usr/bin/python3，避免使用 venv 中的 python
-      const child = spawn('/usr/bin/python3', [scriptPath, paramsJson], {
+      // 选择正确的 Python 路径：
+      // - Docker 环境：crawl4ai 安装在系统 Python，但 entrypoint.sh 激活了虚拟环境
+      //   所以需要显式使用 /usr/bin/python3 绕过 venv
+      // - 本机环境：直接使用 python3（macOS/Linux）或 python（Windows）
+      const isDocker = existsSync('/.dockerenv') || process.env.DOCKER_ENV === 'true';
+      const pythonPath = isDocker ? '/usr/bin/python3' : 'python3';
+
+      const child = spawn(pythonPath, [scriptPath, paramsJson], {
         cwd,
         env: {
           ...process.env,
@@ -249,7 +253,13 @@ export const crawl4aiTool: Tool = {
       });
 
       child.on('error', (err) => {
-        reject(new Error(`Failed to start crawl4ai: ${err.message}. Make sure crawl4ai is installed: pip install crawl4ai`));
+        const errorMsg = err.message.includes('ENOENT')
+          ? `Python not found. Please install Python 3 and crawl4ai:\n` +
+            `  macOS:   brew install python3 && pip3 install crawl4ai\n` +
+            `  Linux:   sudo apt install python3 python3-pip && pip3 install crawl4ai\n` +
+            `  Windows: Install Python from python.org, then: pip install crawl4ai`
+          : `Failed to start crawl4ai: ${err.message}. Make sure crawl4ai is installed: pip install crawl4ai`;
+        resolve({ success: false, error: errorMsg });
       });
     });
   }
