@@ -100,19 +100,19 @@ export class ToolRegistry {
     this.tools.set(tool.name, tool);
   }
 
-  async executeTool(name: string, params: Record<string, unknown>): Promise<unknown> {
+  async executeTool(name: string, params: Record<string, unknown>, context?: Record<string, unknown>): Promise<unknown> {
     const tool = this.tools.get(name);
     if (!tool) {
       throw new Error(`Tool not found: ${name}`);
     }
-    return tool.execute(params);
+    return tool.execute(params, context);
   }
 
   /**
    * 执行工具（executeTool 别名）
    */
-  async execute(name: string, params: Record<string, unknown>): Promise<unknown> {
-    return this.executeTool(name, params);
+  async execute(name: string, params: Record<string, unknown>, context?: Record<string, unknown>): Promise<unknown> {
+    return this.executeTool(name, params, context);
   }
 
   /**

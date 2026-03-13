@@ -316,6 +316,16 @@ export async function main(): Promise<void> {
   // Start channels
   await startChannels();
 
+  // Register plugin tools (启动时一次性注册)
+  if (pluginLoader) {
+    try {
+      await pluginLoader.registerPluginTools(toolRegistry, config);
+      console.log('[MantisBot] Plugin tools registered');
+    } catch (error) {
+      console.error('[MantisBot] Failed to register plugin tools:', error);
+    }
+  }
+
   // 在 WebSocket 服务器启动后安装日志拦截器，将后续 console 输出实时推送到前端
   installLogInterceptor();
 

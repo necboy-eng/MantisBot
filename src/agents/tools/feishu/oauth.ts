@@ -2,6 +2,7 @@
 
 import { getUATStore } from './uat-store.js';
 import { getConfig } from '../../../config/loader.js';
+import { DEFAULT_SCOPES } from '../../../plugins/feishu-advanced/tool-scopes.js';
 
 /**
  * OAuth 设备授权结果
@@ -9,50 +10,53 @@ import { getConfig } from '../../../config/loader.js';
 export interface DeviceAuthResult {
   deviceCode: string;
   verificationUri: string;
+  verificationUriComplete: string; // 完整授权链接（包含 app_id 和 user_code）
   userCode: string;
   expiresIn: number;
   interval: number;
 }
 
 /**
- * OAuth 令牌响应
- */
-export interface OAuthTokenResponse {
-  accessToken: string;
-  refreshToken: string;
-  expiresIn: number;
-}
-
-interface DeviceAuthResponse {
-  code: number;
-  msg: string;
-  data: {
-    device_code: string;
-    verification_uri: string;
-    user_code: string;
-    expires_in: number;
-    interval: number;
-  };
-}
-
-interface AccessTokenResponse {
-  code: number;
-  msg: string;
-  data: {
-    access_token: string;
-    refresh_token: string;
-    expires_in: number;
-  };
-}
-
-/**
  * 飞书 OAuth 设备流授权
+ * 使用标准 OAuth 2.0 Device Authorization Grant (RFC 8628)
  */
 export class FeishuOAuth {
   /**
-   * 启动设备授权流程
+   * 获取 OAuth 端点
    */
-  async startDeviceAuthFlow(userId: string): Promise<DeviceAuthResult> {
+  private getOAuthEndpoints(brand?: string): {
+    deviceAuthorization: string;
+    token: string;
+  } {
+    // 默认使用飞书端点
+    if (!brand || brand === 'feishu') {
+      return {
+        deviceAuthorization: 'https://accounts.feishu.cn/oauth/v1/device_authorization',
+        token: 'https://open.feishu.cn/open-apis/authen/v2/oauth/token',
+      };
+    }
+    // Lark 端点
+    if (brand === 'lark') {
+      return {
+        deviceAuthorization: 'https://accounts.larksuite.com/oauth/v1/device_authorization',
+        token: 'https://open.larksuite.com/open-apis/authen/v2/oauth/token',
+      };
+    }
+    // 自定义域名
+    const base = brand.replace(/\/+$/, '');
+    return {
+      deviceAuthorization: `${base}/oauth/v1/device_authorization`,
+      token: `${base}/open-apis/authen/v2/oauth/token`,
+    };
+  }
+
+  /**
+   * 启动设备授权流程
+   * 使用标准 OAuth 2.0 Device Authorization Grant
+   * @param userId 用户 ID
+   * @param scope 可选的权限范围，不传则使用默认权限集
+   */
+  async startDeviceAuthFlow(userId: string, scope?: string): Promise<DeviceAuthResult> {
     const config = getConfig();
     const feishuConfig = (config.channels as any)?.feishu;
 
@@ -64,39 +68,71 @@ export class FeishuOAuth {
       throw new Error('飞书 appId 或 appSecret 未配置');
     }
 
-    const oauthConfig = feishuConfig.oauth || {};
+    const brand = feishuConfig.brand || 'feishu';
+    const endpoints = this.getOAuthEndpoints(brand);
+
+    // 使用传入的 scope 或默认权限集
+    // 默认权限集包含 bitable、drive、task、calendar 等常用功能所需的权限
+    let effectiveScope = scope || DEFAULT_SCOPES.join(' ');
+
+    // 确保 offline_access 在 scope 中，以获取 refresh_token
+    if (!effectiveScope.includes('offline_access')) {
+      effectiveScope = `${effectiveScope} offline_access`;
+    }
+
+    console.log('[FeishuOAuth] Requesting scopes:', effectiveScope.split(' ').length, 'scopes');
+
+    // 使用 HTTP Basic 认证
+    const basicAuth = Buffer.from(`${feishuConfig.appId}:${feishuConfig.appSecret}`).toString('base64');
+
+    const body = new URLSearchParams();
+    body.set('client_id', feishuConfig.appId);
+    body.set('scope', effectiveScope);
 
     try {
-      const response = await fetch('https://open.feishu.cn/open-apis/authen/v1/oidc/device_code', {
+      const response = await fetch(endpoints.deviceAuthorization, {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json',
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'Authorization': `Basic ${basicAuth}`,
         },
-        body: JSON.stringify({
-          app_id: feishuConfig.appId,
-          grant_type: 'device_code',
-        }),
+        body: body.toString(),
       });
 
-      const data = await response.json() as DeviceAuthResponse;
+      const text = await response.text();
+      console.log('[FeishuOAuth] Device auth response:', {
+        status: response.status,
+        body: text.slice(0, 500),
+      });
 
-      if (data.code !== 0) {
-        throw new Error(`获取设备码失败：${data.msg}`);
+      let data: Record<string, unknown>;
+      try {
+        data = JSON.parse(text) as Record<string, unknown>;
+      } catch {
+        throw new Error(`设备授权请求失败: HTTP ${response.status} - ${text.slice(0, 200)}`);
       }
 
-      const result = data.data;
+      if (!response.ok || data.error) {
+        const errorMsg = (data.error_description as string) ?? (data.error as string) ?? '未知错误';
+        throw new Error(`设备授权请求失败: ${errorMsg}`);
+      }
+
+      const expiresIn = (data.expires_in as number) ?? 240;
+      const interval = (data.interval as number) ?? 5;
 
       console.log('[FeishuOAuth] Device auth started:', {
-        userCode: result.user_code,
-        expiresIn: result.expires_in,
+        userCode: data.user_code as string,
+        expiresIn,
+        interval,
       });
 
       return {
-        deviceCode: result.device_code,
-        verificationUri: result.verification_uri,
-        userCode: result.user_code,
-        expiresIn: result.expires_in,
-        interval: result.interval,
+        deviceCode: data.device_code as string,
+        verificationUri: data.verification_uri as string,
+        verificationUriComplete: (data.verification_uri_complete as string) ?? (data.verification_uri as string),
+        userCode: data.user_code as string,
+        expiresIn,
+        interval,
       };
     } catch (error: any) {
       console.error('[FeishuOAuth] Failed to start device auth:', error);
@@ -106,6 +142,7 @@ export class FeishuOAuth {
 
   /**
    * 轮询授权状态
+   * 使用标准 OAuth 2.0 Device Flow token 端点
    * @param deviceCode 设备码
    * @param userId 用户 ID（用于存储 UAT）
    * @returns 授权结果或状态
@@ -113,6 +150,7 @@ export class FeishuOAuth {
   async *pollAuthStatus(
     deviceCode: string,
     userId: string,
+    interval: number = 5,
     onStatusChange?: (status: string) => void
   ): AsyncGenerator<
     | { status: 'pending' }
@@ -124,88 +162,102 @@ export class FeishuOAuth {
     const feishuConfig = (config.channels as any)?.feishu;
     const oauthConfig = feishuConfig.oauth || {};
 
+    const brand = feishuConfig.brand || 'feishu';
+    const endpoints = this.getOAuthEndpoints(brand);
+
     const maxAttempts = oauthConfig.maxPollAttempts || 60;
-    const pollInterval = oauthConfig.pollInterval || 3000;
+    const maxPollInterval = 60; // 最大轮询间隔（秒）
+    let pollInterval = interval;
     let attempts = 0;
 
     while (attempts < maxAttempts) {
       attempts++;
 
       try {
-        const response = await fetch('https://open.feishu.cn/open-apis/authen/v1/oidc/access_token', {
+        const response = await fetch(endpoints.token, {
           method: 'POST',
           headers: {
-            'Content-Type': 'application/json',
+            'Content-Type': 'application/x-www-form-urlencoded',
           },
-          body: JSON.stringify({
-            grant_type: 'device_code',
+          body: new URLSearchParams({
+            grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
             device_code: deviceCode,
-            app_id: feishuConfig.appId,
-            app_secret: feishuConfig.appSecret,
-          }),
+            client_id: feishuConfig.appId,
+            client_secret: feishuConfig.appSecret,
+          }).toString(),
         });
 
-        const data = await response.json() as AccessTokenResponse;
+        const data = await response.json() as Record<string, unknown>;
+        const error = data.error as string | undefined;
 
-        if (data.code === 99991663 || data.code === 99991402) {
-          // 速率限制，等待后重试
-          if (onStatusChange) {
-            onStatusChange(`rate_limited (attempt ${attempts}/${maxAttempts})`);
-          }
-          yield { status: 'pending' };
-          await this.sleep(pollInterval);
-          continue;
-        }
+        // 授权成功
+        if (!error && data.access_token) {
+          const tokenData = data;
+          const expiresAt = Date.now() + ((data.expires_in as number) ?? 7200) * 1000;
+          const grantedScope = (data.scope as string) ?? '';
 
-        if (data.code === 99991401 || data.code === 99991400) {
-          // 授权过期
-          console.log('[FeishuOAuth] Authorization expired');
-          yield { status: 'expired' };
+          console.log('[FeishuOAuth] Authorization successful', {
+            userId,
+            expiresAt: new Date(expiresAt).toISOString(),
+            scope: grantedScope.split(' ').length + ' scopes',
+          });
+
+          // 保存 UAT 令牌
+          const uatStore = getUATStore();
+          await uatStore.saveUAT(userId, feishuConfig.appId, {
+            accessToken: tokenData.access_token as string,
+            refreshToken: (tokenData.refresh_token as string) ?? '',
+            expiresAt,
+            userId,
+            appId: feishuConfig.appId,
+            scope: grantedScope,
+          });
+
+          yield {
+            status: 'authorized',
+            accessToken: tokenData.access_token as string,
+            refreshToken: (tokenData.refresh_token as string) ?? '',
+          };
           return;
         }
 
-        if (data.code === 99991663) {
-          // 仍在等待授权
+        // 授权等待中
+        if (error === 'authorization_pending') {
           if (onStatusChange) {
             onStatusChange(`waiting (attempt ${attempts}/${maxAttempts})`);
           }
           yield { status: 'pending' };
-          await this.sleep(pollInterval);
+          await this.sleep(pollInterval * 1000);
           continue;
         }
 
-        if (data.code !== 0) {
-          // 其他错误
-          const errorMsg = data.msg || `错误码：${data.code}`;
-          console.error('[FeishuOAuth] Poll error:', errorMsg);
-          yield { status: 'error', message: errorMsg };
+        // 速率限制，增加轮询间隔
+        if (error === 'slow_down') {
+          pollInterval = Math.min(pollInterval + 5, maxPollInterval);
+          console.log(`[FeishuOAuth] Slow down, interval increased to ${pollInterval}s`);
+          yield { status: 'pending' };
+          await this.sleep(pollInterval * 1000);
+          continue;
+        }
+
+        // 用户拒绝授权
+        if (error === 'access_denied') {
+          console.log('[FeishuOAuth] User denied authorization');
+          yield { status: 'error', message: '用户拒绝了授权' };
           return;
         }
 
-        // 授权成功
-        const tokenData = data.data;
-        const expiresAt = Date.now() + (tokenData.expires_in * 1000);
+        // 授权码过期
+        if (error === 'expired_token' || error === 'invalid_grant') {
+          console.log('[FeishuOAuth] Device code expired');
+          yield { status: 'expired' };
+          return;
+        }
 
-        console.log('[FeishuOAuth] Authorization successful', {
-          userId,
-          expiresAt: new Date(expiresAt).toISOString(),
-        });
-
-        // 保存 UAT 令牌
-        const uatStore = getUATStore();
-        await uatStore.saveUAT(userId, feishuConfig.appId, {
-          accessToken: tokenData.access_token,
-          refreshToken: tokenData.refresh_token,
-          expiresAt,
-          userId,
-          appId: feishuConfig.appId,
-        });
-
-        yield {
-          status: 'authorized',
-          accessToken: tokenData.access_token,
-          refreshToken: tokenData.refresh_token,
-        };
+        // 其他错误
+        const errorMsg = (data.error_description as string) ?? error ?? '未知错误';
+        console.error('[FeishuOAuth] Poll error:', errorMsg);
+        yield { status: 'error', message: errorMsg };
         return;
       } catch (error: any) {
         console.error('[FeishuOAuth] Poll request failed:', error);
@@ -223,7 +275,7 @@ export class FeishuOAuth {
           onStatusChange(`network_error (attempt ${attempts}/${maxAttempts})`);
         }
         yield { status: 'pending' };
-        await this.sleep(pollInterval);
+        await this.sleep(pollInterval * 1000);
       }
     }
 

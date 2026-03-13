@@ -2,7 +2,8 @@
 
 import * as fs from 'fs/promises';
 import * as path from 'path';
-import { Plugin, PluginManifest, Skill, Command, MCPConfig, SdkPluginConfig, SdkMcpServerConfig, toSdkMcpConfig } from './types.js';
+import { Plugin, PluginManifest, Skill, Command, MCPConfig, SdkPluginConfig, SdkMcpServerConfig, toSdkMcpConfig, PluginToolRegisterFn, PluginToolContext, FeishuChannelConfig } from './types.js';
+import type { ToolRegistry } from '../agents/tools/registry.js';
 
 // 全局 PluginLoader 实例引用，用于刷新 skills prompt
 let globalPluginLoader: PluginLoader | null = null;
@@ -394,5 +395,71 @@ export class PluginLoader {
     }
 
     return prompt;
+  }
+
+  // ============================================
+  // 插件工具注册
+  // ============================================
+
+  /**
+   * 注册所有插件的工具
+   * 在 entry.ts 启动时调用，一次性注册
+   * @param registry 工具注册表
+   * @param config 应用配置
+   */
+  async registerPluginTools(
+    registry: ToolRegistry,
+    config: any
+  ): Promise<void> {
+    const feishuConfig = (config.channels as any)?.feishu as FeishuChannelConfig | undefined;
+
+    const context: PluginToolContext = {
+      config,
+      feishuConfig,
+      logger: {
+        info: (msg: string) => console.log(msg),
+        warn: (msg: string) => console.warn(msg),
+        error: (msg: string) => console.error(msg),
+      },
+    };
+
+    for (const plugin of this.getAllPlugins()) {
+      if (!plugin.enabled) {
+        continue;
+      }
+
+      // 检查是否有工具注册入口
+      const toolsPath = plugin.manifest.extends?.tools;
+      if (!toolsPath) {
+        continue;
+      }
+
+      // 检查渠道依赖
+      const deps = plugin.manifest.dependencies;
+      if (deps?.channels && deps.channels.length > 0) {
+        const allChannelsEnabled = deps.channels.every(ch => {
+          const channelConfig = (config.channels as any)?.[ch];
+          return channelConfig?.enabled === true;
+        });
+
+        if (!allChannelsEnabled) {
+          console.log(`[Plugins] Skipping ${plugin.name}: required channels [${deps.channels.join(', ')}] not enabled`);
+          continue;
+        }
+      }
+
+      // 导入并调用注册函数
+      try {
+        console.log(`[Plugins] Registering tools for ${plugin.name}...`);
+        const module = await import(`../../${toolsPath}`);
+        if (module.register && typeof module.register === 'function') {
+          await module.register(registry, context);
+        } else {
+          console.warn(`[Plugins] No register function found in ${toolsPath}`);
+        }
+      } catch (error) {
+        console.error(`[Plugins] Failed to register tools for ${plugin.name}:`, error);
+      }
+    }
   }
 }

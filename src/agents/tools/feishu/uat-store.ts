@@ -12,6 +12,7 @@ export interface UATToken {
   expiresAt: number;
   userId: string;
   appId: string;
+  scope?: string; // 授权的权限范围（空格分隔）
 }
 
 /**

@@ -59,6 +59,8 @@ export class UnifiedAgentRunner extends EventEmitter implements IAgentRunner {
   private abortController: AbortController | null = null;
   /** 暴露 toolRegistry 供外部访问（如 dispatch 创建 vision runner） */
   readonly toolRegistry: ToolRegistry;
+  /** 当前请求的用户上下文（每次 streamRun 前设置） */
+  private userContext?: { userId?: string; platform?: string };
 
   constructor(
     toolRegistry: ToolRegistry,
@@ -138,6 +140,16 @@ export class UnifiedAgentRunner extends EventEmitter implements IAgentRunner {
   setActiveTeam(team: import('../config/schema.js').AgentTeam | null): void {
     (this.claudeRunner as any).options.activeTeam = team ?? undefined;
     console.log(`[UnifiedRunner] Active team set to: ${team?.name ?? 'none'}`);
+  }
+
+  /**
+   * 设置当前请求的用户上下文
+   * 在 dispatchStream 调用 streamRun 之前设置，用于工具执行时获取用户身份
+   */
+  setUserContext(context: { userId?: string; platform?: string } | undefined): void {
+    this.userContext = context;
+    // 同时传递给内部 runner，让工具执行时可以访问
+    (this.claudeRunner as any).userContext = context;
   }
 
   /**

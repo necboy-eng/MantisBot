@@ -16,12 +16,16 @@ export interface PluginManifest {
   };
   dependencies?: {
     plugins?: string[];
+    channels?: string[];  // 依赖的通信渠道
   };
   mcp?: {
     servers?: string[];
   };
   commands?: string[];
   skills?: string[];
+  extends?: {
+    tools?: string;  // 工具注册入口路径（相对于项目根目录）
+  };
 }
 
 export interface Plugin {
@@ -108,6 +112,42 @@ export interface CommandContext {
 export interface CommandResult {
   message?: string;
   attachments?: any[];
+}
+
+// ============================================
+// 插件工具注册类型
+// ============================================
+
+/**
+ * 插件工具注册函数类型
+ */
+export type PluginToolRegisterFn = (
+  registry: import('../agents/tools/registry.js').ToolRegistry,
+  context: PluginToolContext
+) => Promise<void>;
+
+/**
+ * 插件工具注册上下文
+ */
+export interface PluginToolContext {
+  config: any;  // AppConfig
+  feishuConfig: FeishuChannelConfig | undefined;
+  logger: {
+    info: (msg: string) => void;
+    warn: (msg: string) => void;
+    error: (msg: string) => void;
+  };
+}
+
+/**
+ * 飞书渠道配置（简化版）
+ */
+export interface FeishuChannelConfig {
+  enabled: boolean;
+  appId: string;
+  appSecret: string;
+  domain?: string;
+  debug?: boolean;
 }
 
 // ============================================

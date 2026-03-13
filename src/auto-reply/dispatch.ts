@@ -288,6 +288,13 @@ ${content}
         }
       }
 
+      // 设置用户上下文（用于工具执行时获取用户身份，如飞书的 senderOpenId）
+      const runner = this.agentRunner as any;
+      if (typeof runner.setUserContext === 'function') {
+        runner.setUserContext({ userId, platform: message.platform });
+        console.log(`[DispatchStream] User context set: userId=${userId}, platform=${message.platform}`);
+      }
+
       // Search relevant memories
       console.log('[DispatchStream] Searching memories for:', content.substring(0, 50));
       const memories = await this.memoryManager.searchHybrid('default', content, {

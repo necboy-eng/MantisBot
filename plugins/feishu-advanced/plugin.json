@@ -1,0 +1,14 @@
+{
+  "name": "feishu-advanced",
+  "version": "1.0.0",
+  "description": "飞书高级功能：多维表格、任务管理、日历、云盘等",
+  "author": {
+    "name": "Anthropic"
+  },
+  "extends": {
+    "tools": "src/plugins/feishu-advanced/index.ts"
+  },
+  "dependencies": {
+    "channels": ["feishu"]
+  }
+}

@@ -152,7 +152,48 @@ const MCP_ONLY_TOOLS = new Set([
   'browser_refresh',
   'browser_go_back',
   'browser_get_html',
-  'browser_evaluate'
+  'browser_evaluate',
+  // 飞书高级工具 - 授权
+  'feishu_auth',
+  // 飞书高级工具 - 多维表格
+  'feishu_bitable_app',             // 多维表格应用管理
+  'feishu_bitable_app_table',       // 数据表管理
+  'feishu_bitable_app_table_field', // 字段管理
+  'feishu_bitable_app_table_record', // 记录管理
+  'feishu_bitable_app_table_view',  // 视图管理
+  // 飞书高级工具 - 任务
+  'feishu_task_task',               // 任务管理
+  'feishu_task_tasklist',           // 任务清单管理
+  'feishu_task_comment',            // 任务评论
+  'feishu_task_subtask',            // 子任务
+  // 飞书高级工具 - 日历
+  'feishu_calendar_calendar',       // 日历管理
+  'feishu_calendar_event',          // 日历事件
+  'feishu_calendar_event_attendee', // 事件参与者
+  'feishu_calendar_freebusy',       // 忙闲查询
+  // 飞书高级工具 - 云文档
+  'feishu_drive_file',              // 文件管理
+  'feishu_doc_comments',            // 文档评论
+  'feishu_doc_media',               // 文档媒体资源
+  // 飞书高级工具 - 知识库
+  'feishu_wiki_space',              // 知识空间管理
+  'feishu_wiki_space_node',         // 知识节点管理
+  // 飞书高级工具 - 电子表格
+  'feishu_sheet',                   // 电子表格
+  // 飞书高级工具 - 搜索
+  'feishu_search_doc_wiki',         // 文档/知识库搜索
+  // 飞书高级工具 - 群聊
+  'feishu_chat',                    // 群聊管理
+  'feishu_chat_members',            // 群成员管理
+  // 飞书高级工具 - 用户
+  'feishu_get_user',                // 获取用户信息
+  'feishu_search_user',             // 搜索用户
+  // 飞书高级工具 - 消息
+  'feishu_im_user_message',         // 发送消息
+  'feishu_im_user_get_messages',    // 获取消息列表
+  'feishu_im_user_get_thread_messages', // 获取话题消息
+  'feishu_im_user_search_messages', // 搜索消息
+  'feishu_im_user_fetch_resource',  // 获取消息资源
 ]);
 
 // 工具结果截断配置
@@ -305,6 +346,9 @@ export class ClaudeAgentRunner extends EventEmitter {
 
   // 中断控制器
   private abortController: AbortController | null = null;
+
+  // 用户上下文（由 UnifiedAgentRunner.setUserContext 设置）
+  userContext?: { userId?: string; platform?: string };
 
   // 获取当前的 claudeSessionId
   getClaudeSessionId(): string | null {
@@ -547,12 +591,18 @@ export class ClaudeAgentRunner extends EventEmitter {
     }
 
     const properties = schema.properties;
+    const required = new Set(schema.required || []);
     const zodProperties: Record<string, any> = {};
 
     for (const [key, prop] of Object.entries(properties)) {
       const propDef = prop as Record<string, unknown>;
       const zodType = this.jsonSchemaPropToZod(propDef);
-      zodProperties[key] = zodType;
+      // 如果字段不在 required 数组中，标记为可选
+      if (!required.has(key)) {
+        zodProperties[key] = zodType.optional();
+      } else {
+        zodProperties[key] = zodType;
+      }
     }
 
     // 返回 raw shape 对象，而不是 z.object(zodProperties)
@@ -749,7 +799,20 @@ export class ClaudeAgentRunner extends EventEmitter {
           }
 
           try {
-            const result = await this.toolRegistry.execute(toolInfo.name, toolArgs);
+            // 构建工具执行上下文
+            const toolContext: Record<string, unknown> = {};
+            if (this.userContext?.userId) {
+              toolContext.senderOpenId = this.userContext.userId;
+            }
+            if (this.userContext?.platform) {
+              toolContext.platform = this.userContext.platform;
+            }
+
+            const result = await this.toolRegistry.execute(
+              toolInfo.name,
+              toolArgs,
+              Object.keys(toolContext).length > 0 ? toolContext : undefined
+            );
             collectAttachments(result, attachments);
             console.log('[ClaudeAgentRunner] After collectAttachments, total attachments:', attachments.length);
 
