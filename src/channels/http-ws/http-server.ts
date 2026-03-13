@@ -1034,6 +1034,7 @@ export async function createHTTPServer(options: HTTPServerOptions) {
                 attachments: chunk.attachments,
                 sessionName: session.name,
                 usage: chunk.usage,
+                model: currentModelName,  // 当前使用的模型名称
               };
               console.log('[HTTPServer] Sending done event with attachments:', chunk.attachments?.length || 0);
               res.write(`event: done\ndata: ${JSON.stringify(doneData)}\n\n`);
