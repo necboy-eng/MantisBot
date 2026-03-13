@@ -21,6 +21,8 @@
   },
   "backend": {
     "checking": "正在连接后端服务...",
+    "initializing": "正在初始化系统...",
+    "loadingApp": "正在加载应用...",
     "reconnecting": "后端服务可能正在重启，5 秒后自动重试",
     "connectionFailed": "后端连接失败：{{error}}"
   },
@@ -605,5 +607,28 @@
   "scroll": {
     "scrollToTop": "回到顶部",
     "scrollToBottom": "滚动到底部"
+  },
+  "quickActions": {
+    "welcome": "下一代办公专用智能操作系统",
+    "subtitle": "选择一个快捷指令开始对话",
+    "hint": "点击卡片后可编辑提示词再发送",
+    "codeTitle": "代码编写",
+    "codeDesc": "编写代码和脚本，调试程序问题",
+    "codePrompt": "帮我写一段代码，实现",
+    "webTitle": "网页浏览",
+    "webDesc": "搜索网页信息，研究技术文档",
+    "webPrompt": "帮我搜索一下关于",
+    "fileTitle": "文件处理",
+    "fileDesc": "读取、编辑、管理文件和文档",
+    "filePrompt": "帮我处理文件：",
+    "dataTitle": "数据分析",
+    "dataDesc": "分析数据，生成图表和报告",
+    "dataPrompt": "帮我分析这份数据：",
+    "automationTitle": "自动化任务",
+    "automationDesc": "自动化重复性工作，定时执行任务",
+    "automationPrompt": "帮我自动化这个任务：",
+    "memoryTitle": "智能记忆",
+    "memoryDesc": "保存重要信息到长期记忆中",
+    "memoryPrompt": "请记住这个信息："
   }
 }

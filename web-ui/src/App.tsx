@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { MessageCircle, Settings, Plus, Bot, FileText, Download, Image, Trash2, ExternalLink, Clock, LayoutDashboard, Wifi, FolderOpen, Square, CheckSquare, LogOut, Star, ChevronDown, ChevronRight, ChevronLeft, Terminal, MessageSquare, Slack, Phone, MessageCircleCode, Globe, Paperclip, X as XIcon } from 'lucide-react';
+import { MessageCircle, Settings, Plus, FileText, Download, Image, Trash2, ExternalLink, Clock, LayoutDashboard, Wifi, FolderOpen, Square, CheckSquare, LogOut, Star, ChevronDown, ChevronRight, ChevronLeft, Terminal, MessageSquare, Slack, Phone, MessageCircleCode, Globe, Paperclip, X as XIcon } from 'lucide-react';
 import { CanvasPanel, FileItem, BrowserSnapshot, TerminalOutput, SearchUrlList } from './components/CanvasPanel';
 import { CronPanel } from './components/CronPanel';
 import { TunnelPanel } from './components/TunnelPanel';
@@ -22,6 +22,8 @@ import { ToastContainer } from './components/Toast';
 import type { ToastItem } from './components/Toast';
 import { CommandPalette } from './components/CommandPalette';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { QuickActions } from './components/QuickActions';
+import { LoadingScreen } from './components/LoadingScreen';
 import { useTranslation } from 'react-i18next';
 import i18n from './i18n';
 import { appendTokenToWsUrl, appendTokenToUrl, authFetch, clearAuthToken } from './utils/auth';
@@ -295,6 +297,7 @@ function App() {
 
   const [sessions, setSessions] = useState<Session[]>([]);
   const [sessionsLoading, setSessionsLoading] = useState(false);
+  const [initialLoadComplete, setInitialLoadComplete] = useState(false);  // 首次加载完成标记
   const [currentSession, setCurrentSession] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
@@ -439,10 +442,16 @@ function App() {
 
     const checkBackendHealth = async () => {
       try {
+        // 添加超时控制，避免请求挂起
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 5000);
+
         const response = await fetch('/health', {
           method: 'GET',
-          headers: { 'Cache-Control': 'no-cache' }
+          headers: { 'Cache-Control': 'no-cache' },
+          signal: controller.signal,
         });
+        clearTimeout(timeoutId);
 
         if (!isMounted) return;
 
@@ -470,7 +479,10 @@ function App() {
         if (!isMounted) return;
 
         failureCount++;
-        const msg = error instanceof Error ? error.message : String(error);
+        const isTimeout = error instanceof Error && error.name === 'AbortError';
+        const msg = isTimeout
+          ? '连接超时'
+          : (error instanceof Error ? error.message : String(error));
         setHealthError(msg.includes('Failed to fetch') || msg.includes('fetch') ? '无法连接到服务器' : msg);
         setRetryCount(prev => prev + 1);
 
@@ -480,8 +492,9 @@ function App() {
           setBackendStatus('reconnecting');
         }
 
-        // 5 秒后重试
-        retryTimer = setTimeout(checkBackendHealth, 5000);
+        // 5 秒后重试（首次失败后缩短等待时间）
+        const retryDelay = failureCount <= 2 ? 2000 : 5000;
+        retryTimer = setTimeout(checkBackendHealth, retryDelay);
       }
     };
 
@@ -1281,6 +1294,7 @@ function App() {
       console.error('Failed to fetch sessions:', e);
     } finally {
       setSessionsLoading(false);
+      setInitialLoadComplete(true);
     }
   }
 
@@ -2221,31 +2235,20 @@ function App() {
 
   return (
     <ErrorBoundary>
-      {/* 后端状态提示 */}
-      {backendStatus === 'checking' && (
-        <div className="fixed top-0 left-0 right-0 z-50 bg-blue-500 text-white text-center py-2 text-sm">
-          <div className="flex items-center justify-center gap-2">
-            <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-            </svg>
-            {t('backend.checking')}
-          </div>
-        </div>
+      {/* 全屏加载动画 - checking/initializing 状态 或 数据未加载完成 */}
+      {((backendStatus === 'checking' || backendStatus === 'initializing') || !initialLoadComplete) && (
+        <LoadingScreen
+          status={
+            backendStatus === 'checking' ? 'checking' :
+            backendStatus === 'initializing' ? 'initializing' :
+            backendStatus === 'reconnecting' ? 'reconnecting' :
+            'loadingApp'
+          }
+          retryCount={retryCount}
+        />
       )}
 
-      {backendStatus === 'initializing' && (
-        <div className="fixed top-0 left-0 right-0 z-50 bg-indigo-500 text-white text-center py-2 text-sm">
-          <div className="flex items-center justify-center gap-2">
-            <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-            </svg>
-            后端初始化中：{healthError}
-          </div>
-        </div>
-      )}
-
+      {/* 后端重连提示 - 仅在 reconnecting 时显示顶部横条 */}
       {backendStatus === 'reconnecting' && (
         <div className="fixed top-0 left-0 right-0 z-50 bg-amber-500 text-white text-center py-2 text-sm">
           <div className="flex items-center justify-center gap-2">
@@ -2763,12 +2766,7 @@ function App() {
           )}
 
           {messages.length === 0 ? (
-            <div className="flex items-center justify-center h-full text-gray-400">
-              <div className="text-center">
-                <Bot className="w-16 h-16 mx-auto mb-4 opacity-50" />
-                <p>{t('app.startNewChat')}</p>
-              </div>
-            </div>
+            <QuickActions onActionClick={(prompt) => setInput(prompt)} />
           ) : (
             <div className="space-y-4">
               {messages.map(msg => (

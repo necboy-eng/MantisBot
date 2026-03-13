@@ -21,6 +21,8 @@
   },
   "backend": {
     "checking": "Connecting to backend...",
+    "initializing": "Initializing system...",
+    "loadingApp": "Loading application...",
     "reconnecting": "Backend may be restarting, retrying in 5 seconds",
     "connectionFailed": "Backend connection failed: {{error}}"
   },
@@ -589,5 +591,28 @@
   "scroll": {
     "scrollToTop": "Scroll to top",
     "scrollToBottom": "Scroll to bottom"
+  },
+  "quickActions": {
+    "welcome": "Next-Gen Intelligent Office OS",
+    "subtitle": "Select a quick action to start",
+    "hint": "Click a card to add the prompt to the input, then edit before sending",
+    "codeTitle": "Code Writing",
+    "codeDesc": "Write code and scripts, debug programs",
+    "codePrompt": "Help me write code that implements",
+    "webTitle": "Web Browsing",
+    "webDesc": "Search the web, research documentation",
+    "webPrompt": "Help me search for information about",
+    "fileTitle": "File Handling",
+    "fileDesc": "Read, edit, and manage files",
+    "filePrompt": "Help me process this file:",
+    "dataTitle": "Data Analysis",
+    "dataDesc": "Analyze data, generate charts and reports",
+    "dataPrompt": "Help me analyze this data:",
+    "automationTitle": "Automation",
+    "automationDesc": "Automate repetitive tasks, schedule jobs",
+    "automationPrompt": "Help me automate this task:",
+    "memoryTitle": "Smart Memory",
+    "memoryDesc": "Save important information to long-term memory",
+    "memoryPrompt": "Please remember this:"
   }
 }
