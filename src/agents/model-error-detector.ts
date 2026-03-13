@@ -30,7 +30,13 @@ export function isFallbackableError(error: unknown): boolean {
   // Fallback: string matching for network-level errors without a status code
   // Note: Bare numeric strings like '500' are intentionally excluded to avoid
   // matching user message content (e.g., "error 500", "500 dollars")
+  // But "API Error: 429" style messages are explicit API errors
   const msg = String(error).toLowerCase();
+
+  // API Error with status code pattern (e.g., "API Error: 429", "API Error: 503")
+  if (/api error:\s*[45]\d{2}/.test(msg)) {
+    return true;
+  }
 
   // Rate limit / quota
   if (msg.includes('rate limit') || msg.includes('too many requests') || msg.includes('quota exceeded')) {

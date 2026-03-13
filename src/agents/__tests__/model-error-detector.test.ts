@@ -56,6 +56,16 @@ describe('isFallbackableError', () => {
   });
 
   describe('String pattern detection', () => {
+    test('should detect API Error: 429 pattern', () => {
+      const error = new Error('API Error: 429 {"error":{"code":"1310","message":"quota exceeded"}}');
+      expect(isFallbackableError(error)).toBe(true);
+    });
+
+    test('should detect API Error: 503 pattern', () => {
+      const error = new Error('API Error: 503 Service Unavailable');
+      expect(isFallbackableError(error)).toBe(true);
+    });
+
     test('should detect rate limit in message', () => {
       const error = new Error('rate limit exceeded');
       expect(isFallbackableError(error)).toBe(true);

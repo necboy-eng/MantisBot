@@ -993,8 +993,16 @@ export async function createHTTPServer(options: HTTPServerOptions) {
               })}\n\n`);
               (res as any).flush?.();
             } else if (chunk.type === 'error') {
-              // 错误事件
+              // 错误事件 - 检查是否可以 fallback
               console.log('[HTTPServer] Error:', chunk.content);
+
+              // 检查是否为可 fallback 的错误（如 429、5xx 等）
+              if (isFallbackableError(chunk.content)) {
+                // 抛出异常让 fallback 逻辑处理
+                throw new Error(chunk.content);
+              }
+
+              // 非 fallback 错误，直接发送给前端
               res.write(`event: error\ndata: ${JSON.stringify({ content: chunk.content })}\n\n`);
               (res as any).flush?.();
             } else if (chunk.type === 'complete') {
