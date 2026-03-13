@@ -112,17 +112,19 @@ CREATE TABLE roles (
 
 ```sql
 CREATE TABLE users (
-  id                  TEXT PRIMARY KEY,        -- u_xxxxxxxx
-  username            TEXT UNIQUE NOT NULL,
-  password            TEXT NOT NULL,           -- "argon2id:<hash>" 格式
-  display_name        TEXT,
-  role_id             TEXT NOT NULL DEFAULT 'role_member',
-  enabled             INTEGER DEFAULT 1,
-  failed_login_count  INTEGER DEFAULT 0,       -- 登录失败次数
-  locked_until        INTEGER,                 -- 锁定截止时间（Unix 时间戳）
-  created_at          INTEGER NOT NULL,
-  updated_at          INTEGER NOT NULL,
-  last_login_at       INTEGER,
+  id                       TEXT PRIMARY KEY,        -- u_xxxxxxxx
+  username                 TEXT UNIQUE NOT NULL,
+  password                 TEXT NOT NULL,           -- "argon2id:<hash>" 格式
+  display_name             TEXT,
+  role_id                  TEXT NOT NULL DEFAULT 'role_member',
+  enabled                  INTEGER DEFAULT 1,
+  failed_login_count       INTEGER DEFAULT 0,       -- 登录失败次数
+  locked_until             INTEGER,                 -- 锁定截止时间（Unix 时间戳）
+  force_password_change    INTEGER DEFAULT 0,       -- 1 = 首次登录强制修改密码
+  temp_password_expires_at INTEGER,                 -- 临时密码过期时间（Unix 时间戳）
+  created_at               INTEGER NOT NULL,
+  updated_at               INTEGER NOT NULL,
+  last_login_at            INTEGER,
   FOREIGN KEY (role_id) REFERENCES roles(id)
 );
 ```
@@ -182,13 +184,29 @@ CREATE TABLE refresh_tokens (
 CREATE TABLE audit_logs (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id     TEXT,
-  action      TEXT NOT NULL,   -- login/logout/login_failed/create_user/update_acl 等
+  action      TEXT NOT NULL,   -- 见下方必审计操作清单
   target      TEXT,            -- 操作对象（如被操作的 userId）
   ip          TEXT,
   metadata    TEXT,            -- JSON，记录变更前后值
   created_at  INTEGER NOT NULL
 );
 ```
+
+**必须审计的操作清单（强制实现）：**
+
+| action | 触发时机 |
+| ------ | ------- |
+| `login_success` | 登录成功 |
+| `login_failed` | 登录失败（含锁定信息） |
+| `token_reuse_detected` | RT 复用攻击被检测 |
+| `logout` | 主动登出 |
+| `create_user` | 新建用户 |
+| `update_user` | 修改用户信息/角色/状态 |
+| `delete_user` | 删除用户 |
+| `admin_password_reset` | 管理员重置他人密码 |
+| `force_logout` | 强制下线操作 |
+| `role_permission_changed` | 角色权限修改 |
+| `path_acl_changed` | ACL 规则新增/修改/删除 |
 
 ---
 
@@ -267,11 +285,12 @@ RT 被轮转时：
 | 措施 | 说明 |
 | ---- | ---- |
 | AT 存内存 | 不写 localStorage/sessionStorage，防 XSS 窃取 |
-| RT 存 HttpOnly Cookie | JS 无法读取；配合 SameSite=Strict 防 CSRF |
+| RT 存 HttpOnly Cookie | JS 无法读取；`SameSite=Lax`（UI 与 API 同源时可升级为 Strict）；生产环境强制 `Secure`（`NODE_ENV=production` 时自动开启，localhost 开发环境豁免） |
 | AT 15分钟短期有效 | 即使泄露，窗口极小 |
 | RT 单次使用轮转 + 宽限期 | 检测 Token 复用攻击，同时避免网络抖动误判 |
 | 强制下线（单设备/全部） | 管理员可按 token_id 踢出特定设备，或一键 revoke 用户所有 RT |
 | JWT_SECRET 环境变量 | 不写入 config.json；启动时校验长度 ≥ 32 字节，否则拒绝启动 |
+| JWT 算法锁定 | 验证 AT 时显式传入 `algorithms: ['HS256']`，拒绝 `alg=none` 及其他算法，防止算法混淆攻击 |
 | argon2id 密码哈希 | 计算代价高，防暴力破解 |
 | 登录失败锁定 | 连续 5 次失败后锁定 15 分钟 |
 | 并发会话限制 | 每用户最多 5 个有效 RT，超出自动淘汰最旧会话 |
@@ -366,32 +385,37 @@ interface AuthProvider {
 
 1. 对 requestPath 进行路径安全检查：
    - 规范化路径（解析 ../ 等），防止路径穿越
-   - 转义 LIKE 通配符（% _ \）
+   - 确保路径不含非法字符
 
-2. 查询所有匹配规则（使用精确前缀匹配替代 LIKE）:
-   SELECT * FROM path_acl
-   WHERE storage_id = ?
-   AND subject_id IN (userId, roleId)
-   AND (
-     requestPath = path                           -- 精确匹配
-     OR substr(requestPath, 1, length(path)+1)    -- 前缀匹配（含路径分隔符）
-        = (path || '/')
-   )
-   ORDER BY length(path) DESC                     -- 最长前缀优先
+2. 分两次查询，明确区分 subject_type：
 
-3. 优先级合并:
-   user 级规则  >  role 级规则
+   -- 查询用户级规则
+   SELECT *, 'user' AS level FROM path_acl
+   WHERE subject_type = 'user' AND subject_id = userId
+     AND storage_id = storageId
+     AND (requestPath = path OR substr(requestPath, 1, length(path)+1) = (path || '/'))
+   ORDER BY length(path) DESC LIMIT 1
 
-4. 未匹配任何规则 → 默认拒绝
+   -- 查询角色级规则
+   SELECT *, 'role' AS level FROM path_acl
+   WHERE subject_type = 'role' AND subject_id = roleId
+     AND storage_id = storageId
+     AND (requestPath = path OR substr(requestPath, 1, length(path)+1) = (path || '/'))
+   ORDER BY length(path) DESC LIMIT 1
+
+3. 优先级合并（显式按 subject_type 区分）：
+   用户级规则存在 → 采用用户级结果
+   否则 → 采用角色级结果
+   两者均无匹配 → 默认拒绝
 
 示例:
   role_member → /public : read
   user_alice  → /public : write
 
-  alice 访问 /public/doc.txt  → write ✓
-  bob(member) 访问 /public/doc.txt → read ✓
+  alice 访问 /public/doc.txt  → write ✓（用户级覆盖）
+  bob(member) 访问 /public/doc.txt → read ✓（角色级）
   bob 访问 /private/secret.txt → 拒绝 ✗
-  bob 访问 /public%2F../secret → 规范化后拒绝 ✗
+  bob 访问 /public/../secret → 规范化后拒绝 ✗
 ```
 
 ---
@@ -416,7 +440,7 @@ interface AuthProvider {
 
 | 场景 | 流程 |
 | ---- | ---- |
-| 管理员重置用户密码 | 生成一次性临时密码，显示给管理员；用户首次登录后强制修改 |
+| 管理员重置用户密码 | 生成随机一次性临时密码（argon2id 存储）；设置 `force_password_change=1`、`temp_password_expires_at=now+24h`；将临时密码明文显示给管理员一次；用户首次登录后强制修改，过期未用则账号锁定 |
 | 用户自行修改密码 | 需提供当前密码验证；成功后 revoke 该用户所有 RT（强制重新登录） |
 | 系统完全锁死（无可用管理员） | 提供 CLI 命令：`node dist/cli.js reset-admin-password` |
 
