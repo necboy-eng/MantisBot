@@ -36,11 +36,15 @@ const PermissionModal: React.FC<PermissionModalProps> = ({
   const { t } = useTranslation();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [selectedAnswers, setSelectedAnswers] = useState<Record<number, number[]>>({});
+  const [customInputs, setCustomInputs] = useState<Record<number, string>>({});
   const [countdown, setCountdown] = useState(60);
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // 检查是否为 AskUserQuestion
   const isAskUserQuestion = permission.toolName === 'AskUserQuestion' || permission.toolName === 'askuserquestion';
+
+  // "其他"选项的特殊索引（使用 -1 作为标识）
+  const OTHER_OPTION_INDEX = -1;
 
   // 权限确认弹窗：启动60秒倒计时，超时自动通过
   useEffect(() => {
@@ -81,16 +85,43 @@ const PermissionModal: React.FC<PermissionModalProps> = ({
       const current = prev[questionIndex] || [];
       if (question.multiSelect) {
         // 多选：切换选项
-        if (current.includes(optionIndex)) {
-          return { ...prev, [questionIndex]: current.filter(i => i !== optionIndex) };
+        if (optionIndex === OTHER_OPTION_INDEX) {
+          // "其他"选项：切换选中状态
+          if (current.includes(OTHER_OPTION_INDEX)) {
+            return { ...prev, [questionIndex]: current.filter(i => i !== OTHER_OPTION_INDEX) };
+          } else {
+            return { ...prev, [questionIndex]: [...current.filter(i => i !== OTHER_OPTION_INDEX), OTHER_OPTION_INDEX] };
+          }
         } else {
-          return { ...prev, [questionIndex]: [...current, optionIndex] };
+          // 普通选项
+          if (current.includes(optionIndex)) {
+            const newAnswers = current.filter(i => i !== optionIndex);
+            return { ...prev, [questionIndex]: newAnswers };
+          } else {
+            // 选择普通选项时，取消"其他"选项
+            const newAnswers = current.filter(i => i !== OTHER_OPTION_INDEX);
+            return { ...prev, [questionIndex]: [...newAnswers, optionIndex] };
+          }
         }
       } else {
         // 单选：只选一个
         return { ...prev, [questionIndex]: [optionIndex] };
       }
     });
+
+    // 清除自定义输入（如果选择了非"其他"选项）
+    if (optionIndex !== OTHER_OPTION_INDEX) {
+      setCustomInputs(prev => {
+        const newInputs = { ...prev };
+        delete newInputs[questionIndex];
+        return newInputs;
+      });
+    }
+  };
+
+  // 处理自定义输入
+  const handleCustomInputChange = (questionIndex: number, value: string) => {
+    setCustomInputs(prev => ({ ...prev, [questionIndex]: value }));
   };
 
   // 提交答案
@@ -103,9 +134,19 @@ const PermissionModal: React.FC<PermissionModalProps> = ({
         const selected = selectedAnswers[qIndex];
         if (selected && selected.length > 0) {
           if (q.multiSelect) {
-            answers[qIndex.toString()] = selected.map(i => q.options[i].label);
+            answers[qIndex.toString()] = selected.map(i => {
+              if (i === OTHER_OPTION_INDEX) {
+                return customInputs[qIndex] || t('permission.other');
+              }
+              return q.options[i].label;
+            });
           } else {
-            answers[qIndex.toString()] = q.options[selected[0]].label;
+            const selectedIndex = selected[0];
+            if (selectedIndex === OTHER_OPTION_INDEX) {
+              answers[qIndex.toString()] = customInputs[qIndex] || t('permission.other');
+            } else {
+              answers[qIndex.toString()] = q.options[selectedIndex].label;
+            }
           }
         }
       });
@@ -174,9 +215,17 @@ const PermissionModal: React.FC<PermissionModalProps> = ({
 
   // 渲染 AskUserQuestion UI
   if (isAskUserQuestion && questions.length > 0) {
-    const allAnswered = questions.every((_, qIndex) =>
-      selectedAnswers[qIndex] && selectedAnswers[qIndex].length > 0
-    );
+    // 检查所有问题是否都已回答
+    // 如果选择了"其他"选项，必须有自定义输入才能提交
+    const allAnswered = questions.every((_, qIndex) => {
+      const selected = selectedAnswers[qIndex];
+      if (!selected || selected.length === 0) return false;
+      // 如果选择了"其他"选项，检查是否有自定义输入
+      if (selected.includes(OTHER_OPTION_INDEX) && !customInputs[qIndex]?.trim()) {
+        return false;
+      }
+      return true;
+    });
 
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center">
@@ -249,6 +298,43 @@ const PermissionModal: React.FC<PermissionModalProps> = ({
                       </button>
                     );
                   })}
+                  {/* "其他"选项 */}
+                  <button
+                    onClick={() => handleOptionSelect(qIndex, OTHER_OPTION_INDEX)}
+                    className={`w-full text-left p-3 rounded-lg border-2 transition-all ${
+                      selectedAnswers[qIndex]?.includes(OTHER_OPTION_INDEX)
+                        ? 'border-purple-500 bg-purple-50 dark:bg-purple-900/30'
+                        : 'border-gray-200 dark:border-gray-700 hover:border-purple-300 dark:hover:border-purple-600'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${
+                        selectedAnswers[qIndex]?.includes(OTHER_OPTION_INDEX)
+                          ? 'border-purple-500 bg-purple-500'
+                          : 'border-gray-300 dark:border-gray-600'
+                      }`}>
+                        {selectedAnswers[qIndex]?.includes(OTHER_OPTION_INDEX) && (
+                          <div className="w-2 h-2 rounded-full bg-white" />
+                        )}
+                      </div>
+                      <span className="font-medium text-gray-900 dark:text-white">
+                        {t('permission.other')}
+                      </span>
+                    </div>
+                  </button>
+                  {/* 自定义输入框 */}
+                  {selectedAnswers[qIndex]?.includes(OTHER_OPTION_INDEX) && (
+                    <div className="mt-2 ml-7">
+                      <input
+                        type="text"
+                        value={customInputs[qIndex] || ''}
+                        onChange={(e) => handleCustomInputChange(qIndex, e.target.value)}
+                        placeholder={t('permission.otherPlaceholder')}
+                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                        autoFocus
+                      />
+                    </div>
+                  )}
                 </div>
               </div>
             ))}

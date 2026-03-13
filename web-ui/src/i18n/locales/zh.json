@@ -266,7 +266,13 @@
     "dangerHigh": "此操作可能导致数据丢失",
     "dangerMedium": "此操作将执行命令",
     "dangerLow": "确认此操作",
-    "askQuestion": "请回答以下问题"
+    "askQuestion": "请回答以下问题",
+    "claudeNeedsInfo": "需要您提供一些信息",
+    "skip": "跳过",
+    "submitting": "提交中...",
+    "submitAnswers": "提交答案",
+    "other": "其他",
+    "otherPlaceholder": "请输入您的答案..."
   },
   "canvas": {
     "title": "我的电脑",
@@ -454,7 +460,9 @@
     "claudeNeedsInfo": "需要您提供一些信息",
     "skip": "跳过",
     "submitting": "提交中...",
-    "submitAnswers": "提交答案"
+    "submitAnswers": "提交答案",
+    "other": "其他",
+    "otherPlaceholder": "请输入您的答案..."
   },
   "modelPrompt": {
     "welcome": "欢迎使用 MantisBot",

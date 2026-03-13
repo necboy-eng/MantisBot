@@ -438,7 +438,9 @@
     "claudeNeedsInfo": "Mantis needs some information from you",
     "skip": "Skip",
     "submitting": "Submitting...",
-    "submitAnswers": "Submit Answers"
+    "submitAnswers": "Submit Answers",
+    "other": "Other",
+    "otherPlaceholder": "Please enter your answer..."
   },
   "modelPrompt": {
     "welcome": "Welcome to MantisBot",
