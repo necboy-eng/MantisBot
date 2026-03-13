@@ -192,8 +192,9 @@ export const crawl4aiTool: Tool = {
       console.log(`[Crawl4AI] action=${action}, url=${params.url || (params.urls as string[])?.join(',')}`);
 
       // 使用系统 Python，因为 crawl4ai 在 Docker 中是安装到系统 Python 的
-      // 设置 PLAYWRIGHT_BROWSERS_PATH 指向 Python playwright 的浏览器路径
-      const child = spawn('python3', [scriptPath, paramsJson], {
+      // 注意：entrypoint.sh 会激活虚拟环境，但 crawl4ai 安装在系统 Python
+      // 所以必须显式指定 /usr/bin/python3，避免使用 venv 中的 python
+      const child = spawn('/usr/bin/python3', [scriptPath, paramsJson], {
         cwd,
         env: {
           ...process.env,
