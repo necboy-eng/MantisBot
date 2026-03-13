@@ -81,11 +81,17 @@ RUN npm install -g pptxgenjs
 # 使用系统 pip（不在 venv 中），确保 crawl4ai 命令全局可用
 # 注意：crawl4ai 内部的 Python playwright 与 Node.js playwright 版本不同，不能共用浏览器文件
 # 用独立路径 /app/.playwright-python 隔离，避免与 /app/.playwright（Node.js）冲突
-# 增加 --timeout 参数避免网络超时
+# 增加 --timeout 参数和重试机制避免网络超时
 # 先安装 pydantic 等依赖，再安装 playwright，最后安装 crawl4ai
-RUN pip3 install --no-cache-dir --break-system-packages --timeout 600 pydantic && \
-    pip3 install --no-cache-dir --break-system-packages --timeout 600 playwright>=1.49.0 && \
-    pip3 install --no-cache-dir --break-system-packages --timeout 600 crawl4ai && \
+RUN for i in 1 2 3; do \
+      pip3 install --no-cache-dir --break-system-packages --timeout 600 --retries 5 pydantic && break || sleep 10; \
+    done && \
+    for i in 1 2 3; do \
+      pip3 install --no-cache-dir --break-system-packages --timeout 600 --retries 5 "playwright>=1.49.0" && break || sleep 10; \
+    done && \
+    for i in 1 2 3; do \
+      pip3 install --no-cache-dir --break-system-packages --timeout 600 --retries 5 crawl4ai && break || sleep 10; \
+    done && \
     PLAYWRIGHT_BROWSERS_PATH=/app/.playwright-python crawl4ai-setup
 
 # 备份内置 skills，供首次启动时初始化持久化卷
