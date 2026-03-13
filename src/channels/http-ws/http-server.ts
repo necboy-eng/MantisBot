@@ -13,7 +13,7 @@ import { v4 as uuidv4 } from 'uuid';
 import type { SessionManager } from '../../session/manager.js';
 import type { ToolRegistry } from '../../agents/tools/registry.js';
 import { getConfig, loadConfig, saveConfig } from '../../config/loader.js';
-import type { Config, EmailAccount, EmailConfig, AgentTeam } from '../../config/schema.js';
+import type { Config, ModelConfig, EmailAccount, EmailConfig, AgentTeam } from '../../config/schema.js';
 import { AgentTeamSchema, modelSupportsVision } from '../../config/schema.js';
 import { PRESET_TEAMS } from '../../agents/agent-teams.js';
 import { createAuthMiddleware, computeToken, hashPassword, verifyPassword } from './auth-middleware.js';
@@ -78,11 +78,11 @@ const activeAgentRunners = new Map<string, IAgentRunner>();
  * Returns null if no other models are available
  */
 function findNextModel(
-  config: any,
+  config: Config,
   currentModel: string,
   triedModels: Set<string>
-): { name: string; model: any } | null {
-  const models = config.models as any[];
+): { name: string; model: ModelConfig } | null {
+  const models = config.models;
   for (const m of models) {
     if (m.enabled === false) continue;
     if (m.name === currentModel) continue;
