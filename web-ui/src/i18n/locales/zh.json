@@ -451,7 +451,7 @@
     "dangerMedium": "此操作将执行命令",
     "dangerLow": "确认此操作",
     "askQuestion": "请回答以下问题",
-    "claudeNeedsInfo": "Claude 需要您提供一些信息",
+    "claudeNeedsInfo": "需要您提供一些信息",
     "skip": "跳过",
     "submitting": "提交中...",
     "submitAnswers": "提交答案"

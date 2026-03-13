@@ -435,7 +435,7 @@
     "dangerMedium": "This operation will execute commands",
     "dangerLow": "Confirm this operation",
     "askQuestion": "Please answer the following questions",
-    "claudeNeedsInfo": "Claude needs some information from you",
+    "claudeNeedsInfo": "Mantis needs some information from you",
     "skip": "Skip",
     "submitting": "Submitting...",
     "submitAnswers": "Submit Answers"
