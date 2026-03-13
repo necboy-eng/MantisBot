@@ -1035,6 +1035,12 @@ export async function createHTTPServer(options: HTTPServerOptions) {
                 console.error('[HTTPServer] Failed to detect preferences (async):', err);
               });
 
+              // Update runner cache if this was a successful fallback
+              if (currentModelName !== initialModelName) {
+                activeAgentRunners.set(session.id, currentRunner);
+                console.log('[HTTPServer] Updated runner cache for session after successful fallback');
+              }
+
               // Successfully completed, exit fallback loop
               break fallbackLoop;
             }
@@ -1081,9 +1087,6 @@ export async function createHTTPServer(options: HTTPServerOptions) {
             skillsLoader: options.skillsLoader,
             cwd: workDirManager.getCurrentWorkDir(),
           });
-
-          // Update activeAgentRunners cache
-          activeAgentRunners.set(session.id, fallbackRunner);
 
           // Update for next iteration
           currentRunner = fallbackRunner;
