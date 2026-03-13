@@ -64,6 +64,7 @@ interface Message {
   toolStatus?: ToolStatus[];  // 新增：工具调用状态
   skillChain?: SkillCall[];   // 新增：技能调用链
   agentInvocations?: AgentInvocationStatus[];  // Agent Teams 子调用
+  model?: string;  // 使用的模型名称
 }
 
 // 技能调用记录
@@ -2087,6 +2088,15 @@ function App() {
                 setStreamMessages(prev => prev.map(msg =>
                   msg.id === currentAssistantMsgId
                     ? { ...msg, usage: parsed.usage }
+                    : msg
+                ));
+              }
+
+              // 处理 done 事件中的模型名称
+              if (currentEvent === 'done' && parsed.model) {
+                setStreamMessages(prev => prev.map(msg =>
+                  msg.id === currentAssistantMsgId
+                    ? { ...msg, model: parsed.model }
                     : msg
                 ));
               }

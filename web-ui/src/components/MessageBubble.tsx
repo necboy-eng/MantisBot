@@ -59,6 +59,7 @@ export interface Message {
     inputTokens: number;
     outputTokens: number;
   };
+  model?: string;  // 使用的模型名称
 }
 
 // ─── Props ────────────────────────────────────────────────────────────────────
@@ -78,6 +79,22 @@ interface MessageBubbleProps {
 }
 
 // ─── 工具类型视觉映射 ──────────────────────────────────────────────────────────
+
+// 时间格式化辅助函数
+function formatTimestamp(ts: number): string {
+  const date = new Date(ts);
+  const now = new Date();
+  const isToday = date.toDateString() === now.toDateString();
+
+  const timeStr = date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+
+  if (isToday) {
+    return timeStr;
+  }
+
+  const dateStr = date.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' });
+  return `${dateStr} ${timeStr}`;
+}
 
 interface ToolTheme {
   icon: string;
@@ -477,7 +494,13 @@ export function MessageBubble({
         <div className={`flex items-center gap-2 mb-1.5 ${isUser ? 'justify-end' : ''}`}>
           {isUser && UserActions}
           <span className="text-xs text-gray-400 dark:text-gray-500 select-none">
-            {isUser ? t('message.you', '你') : t('message.assistant', '助手')}
+            {isUser ? (
+              <>
+                {t('message.you', '你')}
+                <span className="mx-1">·</span>
+                {formatTimestamp(msg.timestamp)}
+              </>
+            ) : t('message.assistant', '助手')}
           </span>
         </div>
 
@@ -583,17 +606,31 @@ export function MessageBubble({
           </div>
         )}
 
-        {/* AI 操作按钮 + token 用量 */}
+        {/* AI 操作按钮 + token 用量 + 模型名称 + 时间戳 */}
         {!isUser && (
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between flex-wrap gap-1">
             {AssistantActions}
-            {msg.usage && (
-              <div className="flex items-center gap-1.5 opacity-40 group-hover:opacity-80 transition-opacity duration-200">
+            <div className="flex items-center gap-2 opacity-40 group-hover:opacity-80 transition-opacity duration-200">
+              {/* 模型名称 */}
+              {msg.model && (
+                <span className="text-xs text-gray-400 dark:text-gray-500 select-none flex items-center gap-1">
+                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                  </svg>
+                  {msg.model}
+                </span>
+              )}
+              {/* token 用量 */}
+              {msg.usage && (
                 <span className="text-xs text-gray-400 dark:text-gray-500 select-none">
                   ↑ {msg.usage.inputTokens.toLocaleString()} · ↓ {msg.usage.outputTokens.toLocaleString()} tokens
                 </span>
-              </div>
-            )}
+              )}
+              {/* 时间戳 */}
+              <span className="text-xs text-gray-400 dark:text-gray-500 select-none">
+                {formatTimestamp(msg.timestamp)}
+              </span>
+            </div>
           </div>
         )}
       </div>
