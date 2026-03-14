@@ -11,8 +11,6 @@ export const ServerConfigSchema = z.object({
   // 访问鉴权配置
   auth: z.object({
     enabled: z.boolean().default(false),
-    username: z.string().default('admin'),
-    password: z.string().default(''),
   }).optional(),
   tailscale: z.object({
     enabled: z.boolean().default(false),
