@@ -94,77 +94,6 @@ class WorkDirManager {
   }
 
   /**
-   * 获取系统默认允许的路径列表（不受用户配置影响）
-   */
-  private getSystemDefaultAllowedPaths(): string[] {
-    const defaultPaths: string[] = [];
-
-    // /tmp 目录（macOS 上 /tmp → /private/tmp，两者都加）
-    defaultPaths.push('/tmp');
-    try { defaultPaths.push(fs.realpathSync('/tmp')); } catch { /* ignore */ }
-    // NAS 自动挂载目录
-    defaultPaths.push('/tmp/mantis-nas');
-    try { defaultPaths.push(fs.realpathSync('/tmp') + '/mantis-nas'); } catch { /* ignore */ }
-
-    // macOS 网络挂载卷（Finder/系统挂载到 /Volumes/xxx）
-    if (process.platform === 'darwin') {
-      defaultPaths.push('/Volumes');
-    }
-
-    // 用户主目录
-    defaultPaths.push(os.homedir());
-
-    // 在 Docker 环境中添加特定目录
-    if (isRunningInDocker()) {
-      // Docker 容器内的 root 目录
-      defaultPaths.push('/root');
-      // 应用目录
-      defaultPaths.push('/app');
-      // 挂载的宿主机主目录
-      const dockerDefault = getDockerDefaultWorkDir();
-      if (dockerDefault) {
-        defaultPaths.push(dockerDefault);
-      }
-    }
-
-    return defaultPaths;
-  }
-
-  /**
-   * 检查路径是否在允许的路径列表中
-   */
-  private isPathAllowed(resolvedPath: string): { allowed: boolean; reason?: string } {
-    const config = getConfig();
-    const userAllowedPaths = config.allowedPaths || [];
-
-    // 获取系统默认允许路径
-    const systemDefaultPaths = this.getSystemDefaultAllowedPaths();
-
-    // 首先检查系统默认允许路径
-    for (const defaultPath of systemDefaultPaths) {
-      if (resolvedPath.startsWith(defaultPath)) {
-        return { allowed: true };
-      }
-    }
-
-    // 然后检查用户配置的允许路径
-    for (const allowedPath of userAllowedPaths) {
-      if (resolvedPath.startsWith(allowedPath)) {
-        return { allowed: true };
-      }
-    }
-
-    // 构建用于显示的完整允许列表
-    const allAllowedPaths = [...systemDefaultPaths, ...userAllowedPaths];
-
-    // 不在允许列表中
-    return {
-      allowed: false,
-      reason: `目录不在允许列表中。当前允许的目录: ${allAllowedPaths.join(', ')}`
-    };
-  }
-
-  /**
    * 获取当前工作目录
    */
   getCurrentWorkDir(): string {
@@ -174,9 +103,10 @@ class WorkDirManager {
   /**
    * 设置当前工作目录
    * @param newDir 新的工作目录路径
-   * @returns 是否设置成功，以及是否需要添加权限
+   * @returns 是否设置成功
+   * 注：路径权限检查已由 ACL 系统接管
    */
-  setCurrentWorkDir(newDir: string): { success: boolean; error?: string; needsPermission?: boolean; suggestedPath?: string } {
+  setCurrentWorkDir(newDir: string): { success: boolean; error?: string } {
     try {
       // 解析绝对路径
       const resolvedPath = path.resolve(newDir);
@@ -197,17 +127,6 @@ class WorkDirManager {
         fs.accessSync(resolvedPath, fs.constants.R_OK);
       } catch {
         return { success: false, error: `没有读取权限: ${resolvedPath}` };
-      }
-
-      // 检查是否在允许的路径列表中
-      const { allowed, reason } = this.isPathAllowed(resolvedPath);
-      if (!allowed) {
-        return {
-          success: false,
-          error: reason,
-          needsPermission: true,
-          suggestedPath: resolvedPath
-        };
       }
 
       // 设置新的工作目录

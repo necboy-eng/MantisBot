@@ -1,69 +1,105 @@
 // web-ui/src/utils/auth.ts
-// 前端鉴权工具：token 存取 + fetch 请求 header 注入
+// AT 仅存内存，RT 存于 HttpOnly Cookie（由服务端 Set-Cookie 管理）
+// 对外暴露与旧版兼容的 authFetch / appendTokenToUrl / appendTokenToWsUrl
 
-const AUTH_TOKEN_KEY = 'mantis_auth_token';
+let _accessToken: string | null = null;
+let _refreshPromise: Promise<string | null> | null = null;
 
-export function getAuthToken(): string | null {
-  return localStorage.getItem(AUTH_TOKEN_KEY);
+export function setAccessToken(token: string | null): void {
+  _accessToken = token;
 }
 
-export function setAuthToken(token: string): void {
-  localStorage.setItem(AUTH_TOKEN_KEY, token);
+export function getAccessToken(): string | null {
+  return _accessToken;
 }
 
-export function clearAuthToken(): void {
-  localStorage.removeItem(AUTH_TOKEN_KEY);
-}
-
-/**
- * 返回需要附加到 fetch 请求的 Authorization header
- * 若无 token 则返回空对象
- */
-export function getAuthHeaders(): Record<string, string> {
-  const token = getAuthToken();
-  if (!token) return {};
-  return { Authorization: `Bearer ${token}` };
+export function clearAccessToken(): void {
+  _accessToken = null;
 }
 
 /**
- * 带鉴权 header 的 fetch 包装
- * 若收到 401，自动清除 token 并派发 auth:unauthorized 事件（由 App 监听后跳转登录页）
- * 不再使用 window.location.reload()，避免在首次加载时造成无限重载循环
+ * 刷新 Access Token（利用 HttpOnly Cookie 中的 RT）
+ * 并发调用时只发一次请求（Promise 复用）
  */
-export async function authFetch(input: RequestInfo, init: RequestInit = {}): Promise<Response> {
-  const headers = {
-    ...getAuthHeaders(),
-    ...(init.headers as Record<string, string> || {}),
-  };
-  const res = await fetch(input, { ...init, headers });
+export async function refreshToken(): Promise<string | null> {
+  if (_refreshPromise) return _refreshPromise;
+
+  _refreshPromise = (async () => {
+    try {
+      const res = await fetch('/auth/refresh', {
+        method: 'POST',
+        credentials: 'include', // 携带 HttpOnly Cookie
+      });
+      if (!res.ok) {
+        _accessToken = null;
+        return null;
+      }
+      const data = await res.json();
+      _accessToken = data.accessToken;
+      return _accessToken;
+    } catch {
+      _accessToken = null;
+      return null;
+    } finally {
+      _refreshPromise = null;
+    }
+  })();
+
+  return _refreshPromise;
+}
+
+/**
+ * 带鉴权的 fetch 包装，AT 过期时自动刷新并重试
+ */
+export async function authFetch(url: string, options: RequestInit = {}): Promise<Response> {
+  const doFetch = (token: string | null) =>
+    fetch(url, {
+      ...options,
+      credentials: 'include',
+      headers: {
+        ...options.headers,
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+    });
+
+  let res = await doFetch(_accessToken);
+
   if (res.status === 401) {
-    clearAuthToken();
-    window.dispatchEvent(new CustomEvent('auth:unauthorized'));
+    const newToken = await refreshToken();
+    if (!newToken) {
+      // 刷新失败，触发重新登录事件
+      window.dispatchEvent(new Event('auth:unauthorized'));
+      return res;
+    }
+    res = await doFetch(newToken);
   }
+
   return res;
 }
 
 /**
- * 在 URL 上附加 token query param（用于 <img>、pdfjs 等无法设置请求头的场景）
- *
- * token 放在其他参数之前，确保 URL 仍以原始路径/文件名结尾。
- * 例如：/api/explore/binary?path=file.docx → /api/explore/binary?token=xxx&path=file.docx
- * 避免 OnlyOffice 等工具用 url.split('.').pop() 取扩展名时得到 "docx&token=xxx"。
- */
-export function appendTokenToUrl(url: string): string {
-  const token = getAuthToken();
-  if (!token) return url;
-  const qmark = url.indexOf('?');
-  if (qmark === -1) {
-    return `${url}?token=${encodeURIComponent(token)}`;
-  }
-  // token 放在已有查询参数之前，URL 末尾仍是原始的 path 值（含文件扩展名）
-  return `${url.slice(0, qmark + 1)}token=${encodeURIComponent(token)}&${url.slice(qmark + 1)}`;
-}
-
-/**
- * 在 WebSocket URL 上附加 token query param
+ * 为 URL 附加 token（WS 连接用）
  */
 export function appendTokenToWsUrl(url: string): string {
-  return appendTokenToUrl(url);
+  if (!_accessToken) return url;
+  const separator = url.includes('?') ? '&' : '?';
+  return `${url}${separator}token=${encodeURIComponent(_accessToken)}`;
+}
+
+// 兼容旧版 appendTokenToUrl（已不建议用于 WS 之外的场景）
+export function appendTokenToUrl(url: string): string {
+  return appendTokenToWsUrl(url);
+}
+
+// 兼容旧版函数名
+export function getAuthToken(): string | null {
+  return _accessToken;
+}
+
+export function setAuthToken(token: string): void {
+  _accessToken = token;
+}
+
+export function clearAuthToken(): void {
+  _accessToken = null;
 }

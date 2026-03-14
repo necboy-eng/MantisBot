@@ -1,8 +1,9 @@
-import { Search, ChevronDown, ChevronRight, FileCode, FileText, Palette, Apple, Wrench, Brain, Music, Utensils, MessageCircle, BookOpen, Folder, RotateCw, Github, Download, Loader2, Pencil } from 'lucide-react';
+import { Search, ChevronDown, ChevronRight, FileCode, FileText, Palette, Apple, Wrench, Brain, Music, Utensils, MessageCircle, BookOpen, Folder, RotateCw, Github, Download, Loader2, Pencil, Lock } from 'lucide-react';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import i18n from '../i18n';
 import { SkillEditorPanel } from './SkillEditorPanel';
+import { usePermission } from '../hooks/usePermission';
 
 interface Skill {
   name: string;
@@ -164,6 +165,7 @@ export function SkillManagementSection({
   onEditorChange
 }: SkillManagementSectionProps) {
   const { t } = useTranslation();
+  const canEdit = usePermission('installSkills');
   const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set());
   const [viewMode, setViewMode] = useState<'grouped' | 'list'>('grouped');
   const [selectedSkill, setSelectedSkill] = useState<Skill | null>(null);
@@ -221,26 +223,30 @@ export function SkillManagementSection({
             />
           </div>
 
-          {/* Install from GitHub Button */}
-          <button
-            onClick={onInstall}
-            className={`flex items-center gap-1.5 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700 text-sm text-gray-600 dark:text-gray-400 transition-colors ${selectedSkill ? 'p-2' : 'px-3 py-2'}`}
-            title={t('skills.install.title')}
-          >
-            <Github className="w-4 h-4" />
-            {!selectedSkill && <span className="hidden sm:inline">{t('skills.install.shortLabel')}</span>}
-          </button>
+          {/* Install from GitHub Button - 仅有权限时显示 */}
+          {canEdit && (
+            <button
+              onClick={onInstall}
+              className={`flex items-center gap-1.5 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700 text-sm text-gray-600 dark:text-gray-400 transition-colors ${selectedSkill ? 'p-2' : 'px-3 py-2'}`}
+              title={t('skills.install.title')}
+            >
+              <Github className="w-4 h-4" />
+              {!selectedSkill && <span className="hidden sm:inline">{t('skills.install.shortLabel')}</span>}
+            </button>
+          )}
 
-          {/* Reload Button */}
-          <button
-            onClick={onReload}
-            disabled={reloading}
-            className={`flex items-center gap-1.5 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700 text-sm text-gray-600 dark:text-gray-400 disabled:opacity-50 transition-colors ${selectedSkill ? 'p-2' : 'px-3 py-2'}`}
-            title="重新加载 skills（无需重启服务）"
-          >
-            <RotateCw className={`w-4 h-4 ${reloading ? 'animate-spin' : ''}`} />
-            {!selectedSkill && <span className="hidden sm:inline">{reloading ? t('common.loading') : t('skills.reload')}</span>}
-          </button>
+          {/* Reload Button - 仅有权限时显示 */}
+          {canEdit && (
+            <button
+              onClick={onReload}
+              disabled={reloading}
+              className={`flex items-center gap-1.5 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700 text-sm text-gray-600 dark:text-gray-400 disabled:opacity-50 transition-colors ${selectedSkill ? 'p-2' : 'px-3 py-2'}`}
+              title="重新加载 skills（无需重启服务）"
+            >
+              <RotateCw className={`w-4 h-4 ${reloading ? 'animate-spin' : ''}`} />
+              {!selectedSkill && <span className="hidden sm:inline">{reloading ? t('common.loading') : t('skills.reload')}</span>}
+            </button>
+          )}
 
           {/* View Mode Toggle */}
           <div className="flex items-center bg-gray-100 dark:bg-gray-800 rounded-lg p-0.5">
@@ -275,6 +281,12 @@ export function SkillManagementSection({
             <button onClick={expandAll} className="hover:text-primary-600">{t('skills.expandAll')}</button>
             <span>|</span>
             <button onClick={collapseAll} className="hover:text-primary-600">{t('skills.collapseAll')}</button>
+          </div>
+        )}
+        {!canEdit && (
+          <div className="flex items-center gap-2 mt-2 px-2 py-1.5 rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 text-xs text-amber-700 dark:text-amber-400">
+            <Lock className="w-3.5 h-3.5 flex-shrink-0" />
+            <span>当前账号仅可查看，无权启用/禁用或编辑 Skills。</span>
           </div>
         )}
       </div>
@@ -323,6 +335,7 @@ export function SkillManagementSection({
                         loading={loading}
                         downloading={downloadingSkills.has(skill.name)}
                         selected={selectedSkill?.name === skill.name}
+                        canEdit={canEdit}
                       />
                     ))}
                   </div>
@@ -343,6 +356,7 @@ export function SkillManagementSection({
                 loading={loading}
                 downloading={downloadingSkills.has(skill.name)}
                 selected={selectedSkill?.name === skill.name}
+                canEdit={canEdit}
               />
             ))}
           </div>
@@ -367,6 +381,7 @@ export function SkillManagementSection({
             onLoadFiles={onLoadFiles}
             onLoadContent={onLoadContent}
             onSaveContent={onSaveContent}
+            readOnly={!canEdit}
           />
         </div>
       )}
@@ -383,9 +398,10 @@ interface SkillItemProps {
   loading: boolean;
   downloading?: boolean;
   selected?: boolean;
+  canEdit?: boolean;
 }
 
-function SkillItem({ skill, onToggle, onDownload, onView, loading, downloading = false, selected = false }: SkillItemProps) {
+function SkillItem({ skill, onToggle, onDownload, onView, loading, downloading = false, selected = false, canEdit = false }: SkillItemProps) {
   return (
     <div className={`p-3 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors rounded-lg ${selected ? 'bg-primary-50 dark:bg-primary-900/10' : ''}`}>
       <div className="flex items-start justify-between gap-4">
@@ -407,21 +423,32 @@ function SkillItem({ skill, onToggle, onDownload, onView, loading, downloading =
         </div>
 
         <div className="flex items-center gap-2 flex-shrink-0">
-          {/* Edit Button */}
+          {/* Edit Button - 无权限时禁用 */}
           <button
-            onClick={onView}
-            className={`p-1 rounded transition-colors ${selected ? 'text-primary-600 dark:text-primary-400' : 'text-gray-400 hover:text-primary-600 dark:hover:text-primary-400'}`}
-            title="查看/编辑 skill 文件"
+            onClick={canEdit ? onView : undefined}
+            disabled={!canEdit}
+            className={`p-1 rounded transition-colors ${
+              !canEdit
+                ? 'text-gray-300 dark:text-gray-600 cursor-not-allowed opacity-50'
+                : selected
+                  ? 'text-primary-600 dark:text-primary-400'
+                  : 'text-gray-400 hover:text-primary-600 dark:hover:text-primary-400'
+            }`}
+            title={canEdit ? '编辑 skill 文件' : '无权限编辑'}
           >
             <Pencil className="w-4 h-4" />
           </button>
 
-          {/* Download Button */}
+          {/* Download Button - 无权限时禁用 */}
           <button
-            onClick={() => onDownload(skill.name)}
-            disabled={downloading}
-            className="p-1 rounded text-gray-400 hover:text-primary-600 dark:hover:text-primary-400 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            title="下载 .skill 文件"
+            onClick={() => canEdit && onDownload(skill.name)}
+            disabled={downloading || !canEdit}
+            className={`p-1 rounded transition-colors ${
+              !canEdit
+                ? 'text-gray-300 dark:text-gray-600 cursor-not-allowed opacity-50'
+                : 'text-gray-400 hover:text-primary-600 dark:hover:text-primary-400 disabled:opacity-50 disabled:cursor-not-allowed'
+            }`}
+            title={!canEdit ? '无权限下载' : '下载 .skill 文件'}
           >
             {downloading
               ? <Loader2 className="w-4 h-4 animate-spin" />
@@ -429,16 +456,16 @@ function SkillItem({ skill, onToggle, onDownload, onView, loading, downloading =
             }
           </button>
 
-          {/* Toggle Switch */}
+          {/* Toggle Switch - 仅有权限时可操作 */}
           <button
-            onClick={() => onToggle(skill.name)}
-            disabled={loading}
+            onClick={() => canEdit && onToggle(skill.name)}
+            disabled={loading || !canEdit}
             className={`w-10 h-5 rounded-full relative transition-colors ${
               skill.enabled
                 ? 'bg-primary-600'
                 : 'bg-gray-300 dark:bg-gray-700'
-            } ${loading ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
-            title={skill.enabled ? '点击禁用' : '点击启用'}
+            } ${(loading || !canEdit) ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+            title={!canEdit ? '无权限操作' : skill.enabled ? '点击禁用' : '点击启用'}
           >
             <div
               className={`w-4 h-4 bg-white rounded-full absolute top-0.5 transition-all ${

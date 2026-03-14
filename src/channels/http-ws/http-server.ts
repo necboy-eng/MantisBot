@@ -16,7 +16,17 @@ import { getConfig, loadConfig, saveConfig } from '../../config/loader.js';
 import type { Config, ModelConfig, EmailAccount, EmailConfig, AgentTeam } from '../../config/schema.js';
 import { AgentTeamSchema, modelSupportsVision } from '../../config/schema.js';
 import { PRESET_TEAMS } from '../../agents/agent-teams.js';
-import { createAuthMiddleware, computeToken, hashPassword, verifyPassword } from './auth-middleware.js';
+import cookieParser from 'cookie-parser';
+import { createAuthMiddleware } from './middleware/authenticate.js';
+import { requirePermission } from './middleware/require-permission.js';
+import { authRouter } from './routes/auth-routes.js';
+import { usersRouter } from './routes/users-routes.js';
+import { pathAclRouter } from './routes/path-acl-routes.js';
+import { initSystemDb } from '../../auth/db.js';
+import { initBuiltinRoles } from '../../auth/roles-store.js';
+import { validateJwtSecret, verifyAccessToken } from '../../auth/jwt.js';
+// auth-middleware.ts 兼容层（保留 computeToken/hashPassword/verifyPassword 供现有代码使用）
+import { computeToken, hashPassword, verifyPassword } from './auth-middleware.js';
 import { EMAIL_PROVIDERS } from '../../config/schema.js';
 import type { Message, FileAttachment } from '../../types.js';
 // AgentRunner 已移除，统一使用 ClaudeAgentRunner
@@ -174,6 +184,19 @@ export async function createHTTPServer(options: HTTPServerOptions) {
   let config: Config = loadConfig();
   const app = express();
 
+  // ─── 系统数据库初始化（用户权限系统）─────────────────────────────────────────
+  if ((config as any).server?.auth?.enabled) {
+    try {
+      validateJwtSecret();
+      initSystemDb();
+      initBuiltinRoles();
+      console.log('[Auth] System database initialized');
+    } catch (err: any) {
+      console.error('[Auth] Failed to initialize auth system:', err.message);
+      throw err;
+    }
+  }
+
   // 初始化命令注册表（供 /api/chat/stream 和 /api/chat 使用）
   const commandRegistry = new CommandRegistry();
   registerHelpCommand(commandRegistry);
@@ -194,6 +217,7 @@ export async function createHTTPServer(options: HTTPServerOptions) {
     app.use(cors());
   }
   app.use(express.json({ limit: '100mb' })); // 增加请求体大小限制以支持大文件上传
+  app.use(cookieParser());
 
   // Health check
   // 检测初始化标记文件（由 docker-entrypoint.sh 在 pip install 期间写入）
@@ -214,41 +238,130 @@ export async function createHTTPServer(options: HTTPServerOptions) {
     res.json({ status: 'ok', timestamp: Date.now() });
   });
 
-  // 鉴权路由（不受 auth 中间件保护）
-  app.post('/api/auth/login', (req, res) => {
-    const cfg = getConfig();
-    const authCfg = cfg.server?.auth;
+  // ─── 新 JWT 鉴权路由（/auth/*，不受中间件保护）──────────────────────────────
+  app.use('/auth', authRouter);
 
-    // 鉴权未启用，直接返回成功
-    if (!authCfg?.enabled) {
-      return res.json({ token: null, authEnabled: false });
-    }
-
-    const { username, password } = req.body || {};
-    if (username === authCfg.username && verifyPassword(password, authCfg.password)) {
-      const token = computeToken(authCfg.username, authCfg.password);
-      return res.json({ token, authEnabled: true });
-    }
-    return res.status(401).json({ error: 'Invalid credentials', message: '账户或密码错误' });
-  });
-
+  // /api/auth/check - 检查当前 token 是否有效，兼容旧前端格式
+  // 返回 { authenticated: boolean, authEnabled: boolean, enabled: boolean, needsSetup: boolean }
   app.get('/api/auth/check', (req, res) => {
     const cfg = getConfig();
-    const authCfg = cfg.server?.auth;
+    const authEnabled = (cfg as any).server?.auth?.enabled ?? false;
 
-    if (!authCfg?.enabled) {
-      return res.json({ authEnabled: false, authenticated: true });
+    if (!authEnabled) {
+      return res.json({ authenticated: true, authEnabled: false, enabled: false, needsSetup: false });
     }
 
+    // 检查是否需要初始化（系统中没有任何用户）
+    try {
+      const { getSystemDb } = require('../../auth/db.js');
+      const db = getSystemDb();
+      const userCount = (db.prepare('SELECT COUNT(*) as count FROM users').get() as any)?.count ?? 0;
+      if (userCount === 0) {
+        return res.json({ authenticated: false, authEnabled: true, enabled: true, needsSetup: true });
+      }
+    } catch {
+      // system.db 未初始化时忽略
+    }
+
+    // 尝试从 Authorization header 验证 AT
     const authHeader = req.headers['authorization'];
-    const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : (req.query?.token as string);
-    const expectedToken = computeToken(authCfg.username, authCfg.password);
-    const authenticated = token === expectedToken;
-    return res.json({ authEnabled: true, authenticated });
+    if (authHeader?.startsWith('Bearer ')) {
+      try {
+        verifyAccessToken(authHeader.slice(7));
+        return res.json({ authenticated: true, authEnabled: true, enabled: true, needsSetup: false });
+      } catch {
+        // token 无效或过期
+      }
+    }
+
+    return res.json({ authenticated: false, authEnabled: true, enabled: true, needsSetup: false });
   });
 
-  // 应用鉴权中间件（保护所有 /api/* 路由，/api/auth/* 已在上面注册，不受影响）
-  app.use('/api', createAuthMiddleware());
+  // ─── /api/auth/login 兼容端点：App.tsx 仍请求此路径，转发到新 JWT 登录逻辑 ────
+  app.post('/api/auth/login', async (req, res) => {
+    const cfg = getConfig();
+    const authCfg = (cfg as any).server?.auth;
+
+    // 鉴权未启用，直接返回成功（旧格式）
+    if (!authCfg?.enabled) {
+      return res.json({ token: null, authEnabled: false, authenticated: true });
+    }
+
+    // 转发到新 JWT 登录逻辑
+    const { username, password } = req.body ?? {};
+    if (!username || !password) {
+      return res.status(400).json({ error: 'BadRequest', message: '缺少用户名或密码' });
+    }
+
+    try {
+      const { login } = await import('../../auth/auth-service.js');
+      const result = await login({
+        username,
+        password,
+        ipAddress: req.ip,
+        userAgent: req.headers['user-agent'],
+      });
+
+      // 设置 RT Cookie（path=/auth，与 auth-routes 一致）
+      res.cookie('rt', result.refreshToken, {
+        httpOnly: true,
+        sameSite: 'lax',
+        secure: process.env.NODE_ENV === 'production',
+        maxAge: 7 * 24 * 60 * 60 * 1000,
+        path: '/auth',
+      });
+
+      // 兼容旧格式（返回 token 字段），同时返回新格式字段
+      return res.json({
+        token: result.accessToken,        // 旧前端读取 token
+        accessToken: result.accessToken,  // 新前端读取 accessToken
+        authEnabled: true,
+        authenticated: true,
+        forcePasswordChange: result.forcePasswordChange,
+      });
+    } catch (err: any) {
+      const status = ['account_locked', 'account_disabled', 'temp_password_expired'].includes(err.message) ? 403 : 401;
+      return res.status(status).json({ error: err.message, message: err.message });
+    }
+  });
+
+  // 应用新 JWT 鉴权中间件（保护所有 /api/* 路由，/api/auth/check 已在上方注册不受影响）
+  app.use('/api', createAuthMiddleware(), usersRouter);
+  app.use('/api', createAuthMiddleware(), pathAclRouter);
+
+  // POST /api/auth/setup - 首次初始化：创建 admin 账号（仅在无用户时可用，无需鉴权）
+  app.post('/api/auth/setup', async (req, res) => {
+    const cfg = getConfig();
+    if (!((cfg as any).server?.auth?.enabled)) {
+      return res.status(400).json({ error: 'auth_not_enabled' });
+    }
+    try {
+      const { getSystemDb } = await import('../../auth/db.js');
+      const db = getSystemDb();
+      const userCount = (db.prepare('SELECT COUNT(*) as count FROM users').get() as any)?.count ?? 0;
+      if (userCount > 0) {
+        return res.status(403).json({ error: 'already_initialized', message: '系统已初始化，请直接登录' });
+      }
+      const { username, password } = req.body ?? {};
+      if (!username || !password || password.length < 8) {
+        return res.status(400).json({ error: 'invalid_input', message: '用户名和密码（至少8位）不能为空' });
+      }
+      const { createUser } = await import('../../auth/users-store.js');
+      const { hashPassword } = await import('../../auth/password.js');
+      createUser({ username, passwordHash: await hashPassword(password), roleId: 'role_admin' });
+      // 直接登录
+      const { login } = await import('../../auth/auth-service.js');
+      const result = await login({ username, password, ipAddress: req.ip, userAgent: req.headers['user-agent'] });
+      res.cookie('rt', result.refreshToken, {
+        httpOnly: true, sameSite: 'lax',
+        secure: process.env.NODE_ENV === 'production',
+        maxAge: 7 * 24 * 60 * 60 * 1000, path: '/auth',
+      });
+      return res.json({ ok: true, token: result.accessToken, accessToken: result.accessToken, authEnabled: true, authenticated: true });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message });
+    }
+  });
 
   // 修改鉴权凭据（受 auth 中间件保护）
   app.put('/api/config/auth', async (req, res) => {
@@ -296,8 +409,53 @@ export async function createHTTPServer(options: HTTPServerOptions) {
       return res.status(500).json({ error: 'Save failed', message: '保存配置失败' });
     }
   });
-  app.get('/api/sessions', (_, res) => {
-    const sessions = options.sessionManager.listSessions();
+  // ─── 会话归属辅助：auth 开启时返回真实 userId，未开启时返回 undefined（全共享模式）
+  const getCallerOwnerId = (req: express.Request): string | undefined => {
+    const cfg = getConfig();
+    const authEnabled = (cfg as any).server?.auth?.enabled ?? false;
+    if (!authEnabled) return undefined;
+    return req.user?.userId;
+  };
+
+  /** 判断当前请求者是否为管理员（有 manageUsers 权限或 role_admin） */
+  const isAdmin = (req: express.Request): boolean => {
+    const u = req.user;
+    if (!u) return false;
+    if (u.roleId === 'role_admin') return true;
+    const perms = u.permissions as any;
+    if (Array.isArray(perms)) return perms.includes('*');
+    if (typeof perms === 'object' && perms !== null) return perms['manageUsers'] === true || perms['*'] === true;
+    return false;
+  };
+
+  app.get('/api/sessions', async (req, res) => {
+    const ownerId = getCallerOwnerId(req);
+    const adminView = ownerId !== undefined && isAdmin(req);
+
+    let sessions;
+    if (ownerId === undefined) {
+      // auth 未开启 → 返回全部（旧行为）
+      sessions = options.sessionManager.listByOwner(null);
+    } else if (adminView) {
+      // 管理员 → 返回全部会话
+      sessions = options.sessionManager.listByOwner(null);
+    } else {
+      // 普通用户 → 只返回自己的
+      sessions = options.sessionManager.listByOwner(ownerId);
+    }
+
+    // 管理员视图：预取 userId→username 映射表，避免 N+1 查询
+    let userMap: Map<string, string> = new Map();
+    if (adminView) {
+      try {
+        const { getAllUsers } = await import('../../auth/users-store.js');
+        const allUsers = getAllUsers();
+        for (const u of allUsers) {
+          userMap.set(u.id, u.displayName || u.username);
+        }
+      } catch { /* 无 system db 时（auth 未开启）忽略 */ }
+    }
+
     res.json(sessions.map(s => {
       // 检测会话的 platform 和 feishuInstanceId（从第一条消息的 metadata 中获取）
       let platform = 'web'; // 默认
@@ -326,6 +484,9 @@ export async function createHTTPServer(options: HTTPServerOptions) {
         starred: s.starred,
         platform, // 渠道平台标识
         feishuInstanceId, // 飞书实例 ID（仅飞书渠道有效）
+        // 归属信息：管理员视图下附带，方便前端区分
+        ownerId: adminView ? (s.ownerId ?? null) : undefined,
+        ownerName: adminView ? (s.ownerId ? (userMap.get(s.ownerId) ?? s.ownerId) : null) : undefined,
       };
     }));
   });
@@ -334,6 +495,11 @@ export async function createHTTPServer(options: HTTPServerOptions) {
     const session = options.sessionManager.getSession(req.params.id);
     if (!session) {
       return res.status(404).json({ error: 'Session not found' });
+    }
+    const ownerId = getCallerOwnerId(req);
+    // 管理员可以查看任意 session；普通用户只能查看自己的
+    if (ownerId !== undefined && session.ownerId && session.ownerId !== ownerId && !isAdmin(req)) {
+      return res.status(403).json({ error: 'Forbidden' });
     }
     res.json(session);
   });
@@ -347,6 +513,12 @@ export async function createHTTPServer(options: HTTPServerOptions) {
       const session = options.sessionManager.getSession(id);
       if (!session) {
         return res.status(404).json({ error: 'Session not found' });
+      }
+
+      // 归属校验
+      const ownerId = getCallerOwnerId(req);
+      if (ownerId !== undefined && session.ownerId && session.ownerId !== ownerId) {
+        return res.status(403).json({ error: 'Forbidden' });
       }
 
       // 更新字段
@@ -383,10 +555,16 @@ export async function createHTTPServer(options: HTTPServerOptions) {
 
   app.delete('/api/sessions/:id', (req, res) => {
     try {
-      const deleted = options.sessionManager.deleteSession(req.params.id);
-      if (!deleted) {
+      const session = options.sessionManager.getSession(req.params.id);
+      if (!session) {
         return res.status(404).json({ error: 'Session not found' });
       }
+      // 归属校验
+      const ownerId = getCallerOwnerId(req);
+      if (ownerId !== undefined && session.ownerId && session.ownerId !== ownerId) {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
+      options.sessionManager.deleteSession(req.params.id);
       res.status(204).send();
     } catch (error) {
       console.error('[HTTPServer] Delete session error:', error);
@@ -398,6 +576,12 @@ export async function createHTTPServer(options: HTTPServerOptions) {
   app.delete('/api/sessions/:id/messages/:msgId', (req, res) => {
     try {
       const { id, msgId } = req.params;
+      const session = options.sessionManager.getSession(id);
+      if (!session) return res.status(404).json({ error: 'Session or message not found' });
+      const ownerId = getCallerOwnerId(req);
+      if (ownerId !== undefined && session.ownerId && session.ownerId !== ownerId) {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
       const deleted = options.sessionManager.deleteMessage(id, msgId);
       if (!deleted) {
         return res.status(404).json({ error: 'Session or message not found' });
@@ -413,6 +597,12 @@ export async function createHTTPServer(options: HTTPServerOptions) {
   app.delete('/api/sessions/:id/messages/:msgId/truncate', (req, res) => {
     try {
       const { id, msgId } = req.params;
+      const session = options.sessionManager.getSession(id);
+      if (!session) return res.status(404).json({ error: 'Session or message not found' });
+      const ownerId = getCallerOwnerId(req);
+      if (ownerId !== undefined && session.ownerId && session.ownerId !== ownerId) {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
       const removed = options.sessionManager.truncateFrom(id, msgId);
       if (removed === -1) {
         return res.status(404).json({ error: 'Session or message not found' });
@@ -428,9 +618,12 @@ export async function createHTTPServer(options: HTTPServerOptions) {
   app.post('/api/sessions', (req, res) => {
     const { name, model, approvalMode } = req.body;
     const config = getConfig();
+    const ownerId = getCallerOwnerId(req);
     const session = options.sessionManager.createSession(
       uuidv4(),
-      model || config.models[0]?.name
+      model || config.models[0]?.name,
+      undefined,
+      ownerId,
     );
     if (name) {
       session.name = name;
@@ -455,18 +648,28 @@ export async function createHTTPServer(options: HTTPServerOptions) {
 
       const config = getConfig();
       const chatId = sessionId || uuidv4();
+      const ownerId = getCallerOwnerId(req);
 
       // Get or create session
       let session = sessionId ? options.sessionManager.getSession(sessionId) : null;
       if (!session) {
         session = options.sessionManager.createSession(
           chatId,
-          model || config.models[0]?.name
+          model || config.models[0]?.name,
+          undefined,
+          ownerId,
         );
-      } else if (model && session.model !== model) {
-        // Update session model if frontend specifies a different model
-        session.model = model;
-        options.sessionManager.updateSession(session);
+      } else {
+        // 归属校验：只有 ownerId 一致才能使用
+        if (ownerId !== undefined && session.ownerId && session.ownerId !== ownerId) {
+          res.status(403).json({ error: 'Forbidden' });
+          return;
+        }
+        if (model && session.model !== model) {
+          // Update session model if frontend specifies a different model
+          session.model = model;
+          options.sessionManager.updateSession(session);
+        }
       }
 
       // Use onMessage callback to process through MessageDispatcher
@@ -474,7 +677,7 @@ export async function createHTTPServer(options: HTTPServerOptions) {
         id: uuidv4(),
         content: message,
         chatId,
-        userId: 'web-user',
+        userId: ownerId ?? req.user?.userId ?? 'web-user',
         platform: 'web',
         timestamp: Date.now()
       });
@@ -512,6 +715,7 @@ export async function createHTTPServer(options: HTTPServerOptions) {
       }
 
       const config = getConfig();
+      const ownerId = getCallerOwnerId(req);
 
       // 调试日志：显示 session 获取情况
       console.log('[HTTPServer] /api/chat/stream called with sessionId:', sessionId, 'message:', message?.slice(0, 50));
@@ -523,10 +727,17 @@ export async function createHTTPServer(options: HTTPServerOptions) {
         console.log('[HTTPServer] Creating NEW session, chatId:', chatId);
         session = options.sessionManager.createSession(
           chatId,
-          model || config.models[0]?.name
+          model || config.models[0]?.name,
+          undefined,
+          ownerId,
         );
       } else {
         console.log('[HTTPServer] Using EXISTING session, message count:', session.messages.length);
+        // 归属校验：只有 ownerId 一致才能使用
+        if (ownerId !== undefined && session.ownerId && session.ownerId !== ownerId) {
+          res.status(403).json({ error: 'Forbidden' });
+          return;
+        }
       }
 
       if (model && session.model !== model) {
@@ -541,7 +752,7 @@ export async function createHTTPServer(options: HTTPServerOptions) {
       if (parsed) {
         const command = commandRegistry.get(parsed.command);
         if (command) {
-          const cmdContext = { chatId, userId: 'web-user', platform: 'http-ws' };
+          const cmdContext = { chatId, userId: ownerId ?? req.user?.userId ?? 'web-user', platform: 'http-ws' };
           const response = await command.handler(parsed.args, cmdContext);
 
           // 把命令响应写入 session（让前端 /api/sessions/:id 能看到历史）
@@ -668,6 +879,15 @@ export async function createHTTPServer(options: HTTPServerOptions) {
         // 存储 agentRunner 实例（用于权限请求响应和后续复用）
         activeAgentRunners.set(session.id, agentRunner);
         console.log('[HTTPServer] Created new UnifiedAgentRunner for session:', session.id, 'cwd:', cwd, 'claudeSessionId:', claudeSessionId || '(new)', 'approvalMode:', approvalMode);
+      }
+
+      // 注入当前用户的 ACL 上下文（每次请求都更新，保证 roleId 准确）
+      if (agentRunner instanceof UnifiedAgentRunner) {
+        agentRunner.setUserContext({
+          userId: req.user?.userId ?? '',
+          roleId: req.user?.roleId ?? 'role_member',
+          platform: 'http-ws',
+        });
       }
 
       // 监听权限请求事件（通过 EventEmitter，仅 ClaudeAgentRunner 支持）
@@ -1159,7 +1379,7 @@ export async function createHTTPServer(options: HTTPServerOptions) {
     }
   });
 
-  app.put('/api/config/allowed-paths', (req, res) => {
+  app.put('/api/config/allowed-paths', requirePermission('editServerConfig'), (req, res) => {
     try {
       const { allowedPaths } = req.body;
       if (!Array.isArray(allowedPaths)) {
@@ -1189,7 +1409,7 @@ export async function createHTTPServer(options: HTTPServerOptions) {
     }
   });
 
-  app.put('/api/config/firecrawl', async (req, res) => {
+  app.put('/api/config/firecrawl', requirePermission('editServerConfig'), async (req, res) => {
     try {
       const { apiKey } = req.body;
       if (typeof apiKey !== 'string') {
@@ -1215,7 +1435,7 @@ export async function createHTTPServer(options: HTTPServerOptions) {
   });
 
   // Reload config from disk
-  app.post('/api/config/reload', async (_, res) => {
+  app.post('/api/config/reload', requirePermission('editServerConfig'), async (_, res) => {
     try {
       config = loadConfig(); // 同时更新局部闭包变量，确保所有路由读到最新配置
       res.json({ success: true, message: 'Configuration reloaded from disk' });
@@ -1291,7 +1511,7 @@ export async function createHTTPServer(options: HTTPServerOptions) {
   });
 
   // 热重载 skills：重新扫描 skills 目录，无需重启服务（必须在 /:name/toggle 之前注册）
-  app.post('/api/skills/reload', async (_, res) => {
+  app.post('/api/skills/reload', requirePermission('installSkills'), async (_, res) => {
     try {
       const { count } = await options.skillsLoader.reload();
       console.log(`[HTTPServer] Skills reloaded: ${count} skills found`);
@@ -1303,7 +1523,7 @@ export async function createHTTPServer(options: HTTPServerOptions) {
   });
 
   // 从 GitHub 安装 skill：下载仓库并复制到 skills 目录，随后热重载
-  app.post('/api/skills/install', async (req, res) => {
+  app.post('/api/skills/install', requirePermission('installSkills'), async (req, res) => {
     try {
       const { source } = req.body as { source?: string };
       if (!source?.trim()) {
@@ -1328,7 +1548,7 @@ export async function createHTTPServer(options: HTTPServerOptions) {
 
   // Toggle skill enabled/disabled status
   // 修改 enabledSkills 列表：添加或移除 skill 名称
-  app.post('/api/skills/:name/toggle', async (req, res) => {
+  app.post('/api/skills/:name/toggle', requirePermission('installSkills'), async (req, res) => {
     try {
       const skillName = req.params.name;
       const enabledSkills = config.enabledSkills || [];
@@ -1385,6 +1605,7 @@ export async function createHTTPServer(options: HTTPServerOptions) {
       const skillDir = path.dirname(skillFilePath);
       const skillsDir = options.skillsLoader.getSkillsDir();
       const packageScript = path.join(skillsDir, 'skill-creator/scripts/package_skill.py');
+      const packageScriptCwd = path.join(skillsDir, 'skill-creator');
 
       if (!fs.existsSync(packageScript)) {
         res.status(500).json({ error: 'package_skill.py not found' });
@@ -1392,7 +1613,7 @@ export async function createHTTPServer(options: HTTPServerOptions) {
       }
 
       tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'skill-pkg-'));
-      await execFileAsync('python3', [packageScript, skillDir, tmpDir]);
+      await execFileAsync('python3', ['-m', 'scripts.package_skill', skillDir, tmpDir], { cwd: packageScriptCwd });
 
       const outputFile = path.join(tmpDir, `${skillName}.skill`);
       if (!fs.existsSync(outputFile)) {
@@ -1429,7 +1650,7 @@ export async function createHTTPServer(options: HTTPServerOptions) {
     }
   });
 
-  app.post('/api/skills/upload', upload.single('file'), async (req, res) => {
+  app.post('/api/skills/upload', requirePermission('installSkills'), upload.single('file'), async (req, res) => {
     try {
       if (!req.file) {
         res.status(400).json({ success: false, error: 'No file uploaded' });
@@ -1533,7 +1754,7 @@ export async function createHTTPServer(options: HTTPServerOptions) {
 
   // Save a specific file in a skill directory
   // PUT /api/skills/:name/file?path=relative/path
-  app.put('/api/skills/:name/file', async (req, res) => {
+  app.put('/api/skills/:name/file', requirePermission('installSkills'), async (req, res) => {
     try {
       const skillName = req.params.name;
       const filePath = req.query.path as string;
@@ -1604,7 +1825,7 @@ export async function createHTTPServer(options: HTTPServerOptions) {
   });
 
   // POST /api/models - Add new model
-  app.post('/api/models', async (req, res) => {
+  app.post('/api/models', requirePermission('editModelConfig'), async (req, res) => {
     try {
       const { name, protocol, provider, model, apiKey, baseUrl, endpoint, capabilities } = req.body;
 
@@ -1658,7 +1879,7 @@ export async function createHTTPServer(options: HTTPServerOptions) {
   });
 
   // PUT /api/models/default - Set default model (must be before /:name)
-  app.put('/api/models/default', async (req, res) => {
+  app.put('/api/models/default', requirePermission('editModelConfig'), async (req, res) => {
     try {
       const { name } = req.body;
 
@@ -1681,7 +1902,7 @@ export async function createHTTPServer(options: HTTPServerOptions) {
   });
 
   // PUT /api/models/:name - Update model configuration
-  app.put('/api/models/:name', async (req, res) => {
+  app.put('/api/models/:name', requirePermission('editModelConfig'), async (req, res) => {
     try {
       const oldName = req.params.name;
       const { name, protocol, provider, model, apiKey, baseUrl, endpoint, capabilities } = req.body;
@@ -1749,7 +1970,7 @@ export async function createHTTPServer(options: HTTPServerOptions) {
   });
 
   // DELETE /api/models/:name - Delete model
-  app.delete('/api/models/:name', async (req, res) => {
+  app.delete('/api/models/:name', requirePermission('editModelConfig'), async (req, res) => {
     try {
       const name = req.params.name;
 
@@ -1786,7 +2007,7 @@ export async function createHTTPServer(options: HTTPServerOptions) {
   });
 
   // POST /api/models/:name/toggle - Toggle model enabled state
-  app.post('/api/models/:name/toggle', async (req, res) => {
+  app.post('/api/models/:name/toggle', requirePermission('editModelConfig'), async (req, res) => {
     try {
       const name = req.params.name;
 
@@ -1810,7 +2031,7 @@ export async function createHTTPServer(options: HTTPServerOptions) {
   });
 
   // POST /api/models/test - Test model configuration
-  app.post('/api/models/test', async (req, res) => {
+  app.post('/api/models/test', requirePermission('editModelConfig'), async (req, res) => {
     try {
       const { name, protocol, provider, model, apiKey, baseUrl } = req.body;
 
@@ -3016,11 +3237,8 @@ export async function createHTTPServer(options: HTTPServerOptions) {
           current: workDirManager.getCurrentWorkDir()
         });
       } else {
-        // 返回错误信息，包括是否需要添加权限
         res.status(400).json({
-          error: result.error,
-          needsPermission: result.needsPermission || false,
-          suggestedPath: result.suggestedPath
+          error: result.error
         });
       }
     } catch (error) {

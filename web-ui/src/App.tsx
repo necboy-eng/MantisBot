@@ -1,5 +1,5 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
-import { MessageCircle, Settings, Plus, FileText, Download, Image, Trash2, ExternalLink, Clock, LayoutDashboard, Wifi, FolderOpen, Square, CheckSquare, LogOut, Star, ChevronDown, ChevronRight, ChevronLeft, Terminal, MessageSquare, Slack, Phone, MessageCircleCode, Globe, Paperclip, X as XIcon } from 'lucide-react';
+import { useState, useEffect, useRef, useCallback, useContext } from 'react';
+import { MessageCircle, Settings, Plus, FileText, Download, Image, Trash2, ExternalLink, Clock, LayoutDashboard, Wifi, FolderOpen, Square, CheckSquare, LogOut, Star, ChevronDown, ChevronRight, ChevronLeft, Terminal, MessageSquare, Slack, Phone, MessageCircleCode, Globe, Paperclip, User, X as XIcon } from 'lucide-react';
 import { CanvasPanel, FileItem, BrowserSnapshot, TerminalOutput, SearchUrlList } from './components/CanvasPanel';
 import { CronPanel } from './components/CronPanel';
 import { TunnelPanel } from './components/TunnelPanel';
@@ -12,6 +12,8 @@ import type { ContextReference, NasReference, EmailReference } from './types/con
 import { SettingsPanel } from './components/SettingsPanel';
 import { ModelConfigPrompt, useModelConfigCheck, markModelConfigPending, markModelConfigured } from './components/ModelConfigPrompt';
 import { LoginPage } from './components/LoginPage';
+import { SetupPage } from './components/SetupPage';
+import { AuthProvider, AuthContext } from './contexts/AuthContext.js';
 import { LanguageSwitcher } from './components/LanguageSwitcher';
 import { ThemeSwitcher } from './components/ThemeSwitcher';
 import { MessageBubble } from './components/MessageBubble';
@@ -88,6 +90,10 @@ interface Session {
   starred?: boolean;            // 星标置顶
   platform?: string;            // 渠道平台标识（feishu, slack, web 等）
   feishuInstanceId?: string;    // 飞书实例 ID（仅飞书渠道有效）
+  /** 管理员视图下返回：会话归属者 userId（null = 外部渠道或 auth 未开启） */
+  ownerId?: string | null;
+  /** 管理员视图下返回：归属者显示名（displayName || username，null 同上） */
+  ownerName?: string | null;
 }
 
 interface AgentTeam {
@@ -318,7 +324,6 @@ function FileAttachmentCard({ attachment, onOpenCanvas }: { attachment: FileAtta
 
 function App() {
   const { t } = useTranslation();
-
   const [sessions, setSessions] = useState<Session[]>([]);
   const [sessionsLoading, setSessionsLoading] = useState(false);
   const [initialLoadComplete, setInitialLoadComplete] = useState(false);  // 首次加载完成标记
@@ -449,6 +454,8 @@ function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [authEnabled, setAuthEnabled] = useState(false);
   const [authChecked, setAuthChecked] = useState(false);
+  const [needsSetup, setNeedsSetup] = useState(false);
+  const { dispatch: authDispatch, state: authState } = useContext(AuthContext);
 
   // 当前使用的 skill（来自 plugin）- 仅用于即时显示
   const [activeSkill, setActiveSkill] = useState<{ name: string; location: string } | null>(null);
@@ -543,11 +550,32 @@ function App() {
   useEffect(() => {
     async function checkAuth() {
       try {
+        // AT 存在内存，刷新后丢失。页面加载时先尝试用 RT Cookie 换新 AT，
+        // 这样用户在 7 天内刷新页面不会被踢回登录页。
+        const { getAccessToken, refreshToken } = await import('./utils/auth.js');
+        if (!getAccessToken()) {
+          const newToken = await refreshToken();
+          if (newToken) {
+            // 刷新成功，同步 AuthContext（解码 payload 还原用户信息）
+            const { decodeAccessToken } = await import('./stores/auth-store.js');
+            const user = decodeAccessToken(newToken);
+            if (user) {
+              authDispatch({ type: 'LOGIN_SUCCESS', payload: { accessToken: newToken, user } });
+              setIsAuthenticated(true);
+              setAuthEnabled(true);
+              setAuthChecked(true);
+              return;
+            }
+          }
+          // RT 也失效 → 继续走 /api/auth/check（可能 auth 未启用）
+        }
+
         const res = await authFetch('/api/auth/check');
         if (res.ok) {
           const data = await res.json();
           setIsAuthenticated(data.authenticated === true);
           setAuthEnabled(data.authEnabled === true);
+          setNeedsSetup(data.needsSetup === true);
         } else {
           setIsAuthenticated(false);
         }
@@ -618,7 +646,8 @@ function App() {
     setFileReferences([]);
   };
 
-  // 新增：更新工作目录（复用函数）
+  // 更新工作目录
+  // 注：路径权限检查已由 ACL 系统接管
   const updateWorkDir = (newDir: string) => {
     if (newDir && newDir !== currentWorkDir) {
       authFetch('/api/workdir', {
@@ -631,20 +660,7 @@ function App() {
           if (data.success) {
             setCurrentWorkDir(data.current);
           } else {
-            // 检查是否需要添加权限
-            if (data.needsPermission && data.suggestedPath) {
-              // 询问用户是否要添加权限
-              const shouldAdd = confirm(
-                `${data.error}\n\n是否要将以下目录添加到允许列表？\n${data.suggestedPath}`
-              );
-
-              if (shouldAdd) {
-                // 添加权限
-                addAllowedPath(data.suggestedPath, newDir);
-              }
-            } else {
-              alert(data.error || t('error.setWorkDirFailed'));
-            }
+            alert(data.error || t('error.setWorkDirFailed'));
           }
         })
         .catch(err => {
@@ -654,112 +670,10 @@ function App() {
     }
   };
 
-  // 新增：添加允许路径并切换工作目录
-  const addAllowedPath = (pathToAdd: string, targetWorkDir: string) => {
-    authFetch('/api/config/allowed-paths')
-      .then(res => res.json())
-      .then(data => {
-        const currentPaths = data.allowedPaths || [];
-        const newPaths = [...currentPaths, pathToAdd];
-
-        // 更新允许路径
-        authFetch('/api/config/allowed-paths', {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ allowedPaths: newPaths })
-        })
-          .then(res => res.json())
-          .then(() => {
-            // 权限添加成功，再次尝试切换工作目录
-            authFetch('/api/workdir', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ path: targetWorkDir })
-            })
-              .then(res => res.json())
-              .then(data => {
-                if (data.success) {
-                  setCurrentWorkDir(data.current);
-                  alert(t('success.permissionAdded'));
-                } else {
-                  alert(data.error || t('error.setWorkDirFailed'));
-                }
-              })
-              .catch(err => {
-                console.error('Failed to set work directory after adding permission:', err);
-                alert(t('error.setWorkDirFailed'));
-              });
-          })
-          .catch(err => {
-            console.error('Failed to add allowed path:', err);
-            alert(t('error.addPermissionFailed'));
-          });
-      })
-      .catch(err => {
-        console.error('Failed to get allowed paths:', err);
-        alert(t('error.getPermissionFailed'));
-      });
-  };
-
-  // 新增：防止权限弹窗重复的标志
-  const pendingPermissionPathRef = useRef<string | null>(null);
-
-  // 新增：处理文件浏览器中的权限错误
-  const handlePermissionError = (path: string, onSuccess: () => void) => {
-    // 防止重复弹窗：如果已经在处理这个路径的权限请求，直接返回
-    if (pendingPermissionPathRef.current === path) {
-      console.log('[Permission] Duplicate permission request for:', path);
-      return;
-    }
-
-    // 标记正在处理这个路径
-    pendingPermissionPathRef.current = path;
-
-    // 询问用户是否要添加权限
-    const shouldAdd = confirm(
-      `目录 ${path} 不在允许列表中。\n\n是否要将此目录添加到允许列表？`
-    );
-
-    if (shouldAdd) {
-      // 添加权限
-      authFetch('/api/config/allowed-paths')
-        .then(res => res.json())
-        .then(data => {
-          const currentPaths = data.allowedPaths || [];
-          const newPaths = [...currentPaths, path];
-
-          // 更新允许路径
-          authFetch('/api/config/allowed-paths', {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ allowedPaths: newPaths })
-          })
-            .then(res => res.json())
-            .then(() => {
-              // 权限添加成功，直接更新工作目录状态（避免再次触发权限检查）
-              setCurrentWorkDir(path);
-              alert(t('success.permissionAdded'));
-              // 清除标志
-              pendingPermissionPathRef.current = null;
-              onSuccess();
-            })
-            .catch(err => {
-              console.error('Failed to add allowed path:', err);
-              alert(t('error.addPermissionFailed'));
-              // 清除标志
-              pendingPermissionPathRef.current = null;
-            });
-        })
-        .catch(err => {
-          console.error('Failed to get allowed paths:', err);
-          alert(t('error.getPermissionFailed'));
-          // 清除标志
-          pendingPermissionPathRef.current = null;
-        });
-    } else {
-      // 用户点击取消，清除标志
-      pendingPermissionPathRef.current = null;
-    }
+  // 处理文件浏览器中的权限错误
+  // 注：路径权限由 ACL 系统管理，此处仅显示错误信息
+  const handlePermissionError = (path: string, _onSuccess: () => void) => {
+    alert(`目录 ${path} 无访问权限，请联系管理员配置 ACL 权限`);
   };
 
   // 获取用户主目录（鉴权确认后才请求）
@@ -2248,10 +2162,24 @@ function App() {
     }
   }
 
+  // 首次初始化：系统无用户时显示引导页
+  if (authChecked && needsSetup) {
+    return (
+      <SetupPage onSetupComplete={(accessToken, user) => {
+        import('./utils/auth.js').then(({ setAccessToken }) => setAccessToken(accessToken));
+        authDispatch({ type: 'LOGIN_SUCCESS', payload: { accessToken, user } });
+        setNeedsSetup(false);
+        setIsAuthenticated(true);
+      }} />
+    );
+  }
+
   // 鉴权未通过时显示登录页
   if (authChecked && !isAuthenticated) {
     return (
-      <LoginPage onLogin={() => {
+      <LoginPage onLoginSuccess={(accessToken, user) => {
+        import('./utils/auth.js').then(({ setAccessToken }) => setAccessToken(accessToken));
+        authDispatch({ type: 'LOGIN_SUCCESS', payload: { accessToken, user } });
         setIsAuthenticated(true);
       }} />
     );
@@ -2454,7 +2382,14 @@ function App() {
                         );
                       })()
                   }
-                  <span className="truncate flex-1">{session.name || '(无标题)'}</span>
+                  <div className="flex-1 min-w-0">
+                    <span className="truncate block">{session.name || '(无标题)'}</span>
+                    {session.ownerName && session.ownerId !== authState.user?.userId && (
+                      <span className="inline-flex items-center gap-0.5 text-[10px] text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-900/30 border border-indigo-200 dark:border-indigo-700 rounded px-1 py-0 leading-4 mt-0.5 max-w-full truncate">
+                        👤 {session.ownerName}
+                      </span>
+                    )}
+                  </div>
                   {!isSelectMode && (
                     <>
                       <Star
@@ -2522,7 +2457,14 @@ function App() {
                     );
                   })()
               }
-              <span className="truncate flex-1">{session.name || '(无标题)'}</span>
+              <div className="flex-1 min-w-0">
+                <span className="truncate block">{session.name || '(无标题)'}</span>
+                {session.ownerName && session.ownerId !== authState.user?.userId && (
+                  <span className="inline-flex items-center gap-0.5 text-[10px] text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-900/30 border border-indigo-200 dark:border-indigo-700 rounded px-1 py-0 leading-4 mt-0.5 max-w-full truncate">
+                    👤 {session.ownerName}
+                  </span>
+                )}
+              </div>
               {!isSelectMode && (
                 <>
                   <Star
@@ -2575,6 +2517,8 @@ function App() {
           </button>
         </div>
 
+
+
         <div className="p-4 border-t border-gray-200 dark:border-gray-800 flex-shrink-0 flex items-center justify-between">
           <button
             onClick={() => setSettingsOpen(true)}
@@ -2583,7 +2527,20 @@ function App() {
             <Settings className="w-4 h-4" />
             {t('app.settings')}
           </button>
-          {authEnabled && (
+
+        </div>
+
+        {authEnabled && authState.user && (
+          <div className="px-4 py-3 border-t border-gray-200 dark:border-gray-800 flex-shrink-0 flex items-center gap-3">
+            <div className="w-8 h-8 rounded-full bg-primary-100 dark:bg-primary-900/40 text-primary-600 dark:text-primary-400 flex items-center justify-center font-bold flex-shrink-0">
+              {authState.user.username.charAt(0).toUpperCase()}
+            </div>
+            <div className="flex-1 min-w-0 flex flex-col">
+              <span className="font-medium text-gray-700 dark:text-gray-300 truncate text-sm">
+                {authState.user.username}
+              </span>
+            </div>
+                      {authEnabled && (
             <button
               onClick={() => { clearAuthToken(); setIsAuthenticated(false); }}
               className="flex items-center gap-1.5 text-gray-400 dark:text-gray-500 hover:text-red-500 dark:hover:text-red-400 transition-colors"
@@ -2592,7 +2549,8 @@ function App() {
               <LogOut className="w-4 h-4" />
             </button>
           )}
-        </div>
+          </div>
+        )}
       </aside>
 
         {/* 桌面端侧边栏折叠按钮 */}
@@ -3210,4 +3168,10 @@ function App() {
   );
 }
 
-export default App;
+export default function AppWithAuth() {
+  return (
+    <AuthProvider>
+      <App />
+    </AuthProvider>
+  );
+}

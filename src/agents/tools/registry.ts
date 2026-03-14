@@ -1,12 +1,8 @@
 // src/agents/tools/registry.ts
 
-import type { Tool, ToolInfo } from '../../types.js';
+import type { Tool, ToolInfo, ToolUserContext } from '../../types.js';
 import { loggerTool } from './logger.js';
 import { readSkillTool } from './read-skill.js';
-import { execTool } from './exec.js';
-import { readTool } from './read.js';
-import { writeTool } from './write.js';
-import { editTool } from './edit.js';
 import { sendFileTool } from './send-file.js';
 import { browserTools } from './browser.js';
 import { memorySearchTool } from './memory-search.js';
@@ -17,10 +13,6 @@ import { crawl4aiTool } from './crawl4ai.js';
 const builtInTools: Record<string, Tool> = {
   logger: loggerTool,
   read_skill: readSkillTool,
-  exec: execTool,
-  read: readTool,
-  write: writeTool,
-  edit: editTool,
   send_file: sendFileTool,
   memory_search: memorySearchTool,
   remember: rememberTool,
@@ -31,8 +23,8 @@ const builtInTools: Record<string, Tool> = {
 // Browser 工具（数组形式）
 const browserToolsArray: Tool[] = browserTools;
 
-// 核心工具（总是可用）
-const CORE_TOOLS = ['read_skill', 'exec', 'read', 'write', 'edit', 'send_file', 'memory_search', 'remember', 'crawl4ai'];
+// 核心工具（总是可用）- 注意：Read/Write/Edit/Bash 由 SDK 内置处理，不走 MCP
+const CORE_TOOLS = ['read_skill', 'send_file', 'memory_search', 'remember', 'crawl4ai'];
 
 export interface ToolRegistryOptions {
   enabledPlugins?: string[];
@@ -100,7 +92,7 @@ export class ToolRegistry {
     this.tools.set(tool.name, tool);
   }
 
-  async executeTool(name: string, params: Record<string, unknown>, context?: Record<string, unknown>): Promise<unknown> {
+  async executeTool(name: string, params: Record<string, unknown>, context?: ToolUserContext): Promise<unknown> {
     const tool = this.tools.get(name);
     if (!tool) {
       throw new Error(`Tool not found: ${name}`);
@@ -111,7 +103,7 @@ export class ToolRegistry {
   /**
    * 执行工具（executeTool 别名）
    */
-  async execute(name: string, params: Record<string, unknown>, context?: Record<string, unknown>): Promise<unknown> {
+  async execute(name: string, params: Record<string, unknown>, context?: ToolUserContext): Promise<unknown> {
     return this.executeTool(name, params, context);
   }
 

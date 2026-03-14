@@ -13,7 +13,7 @@ export class SessionManager {
     this.maxMessages = maxMessages;
   }
 
-  createSession(id: string, model: string, name?: string): Session {
+  createSession(id: string, model: string, name?: string, ownerId?: string): Session {
     const now = Date.now();
     const session: Session = {
       id: id || uuidv4(),
@@ -22,9 +22,27 @@ export class SessionManager {
       messages: [],
       createdAt: now,
       updatedAt: now,
+      ...(ownerId ? { ownerId } : {}),
     };
     this.storage.set(session);
     return session;
+  }
+
+  /**
+   * 列出指定归属者的会话。
+   * - 传入 ownerId：只返回该用户的会话
+   * - 传入 undefined：返回所有无 ownerId 的会话（外部渠道 / auth 未开启时）
+   * - 传入 null：返回全部会话（管理员场景备用）
+   */
+  listByOwner(ownerId: string | undefined | null): Session[] {
+    const all = this.storage.list();
+    if (ownerId === null) {
+      // null 表示不过滤，返回全部
+      return all.sort((a, b) => b.updatedAt - a.updatedAt);
+    }
+    return all
+      .filter(s => s.ownerId === ownerId)
+      .sort((a, b) => b.updatedAt - a.updatedAt);
   }
 
   getSession(id: string): Session | undefined {

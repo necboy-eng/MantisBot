@@ -6,7 +6,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { parse as parseUrl } from 'url';
 import type { GlobalErrorHandler } from '../../reliability/global-error-handler.js';
 import { getConfig } from '../../config/loader.js';
-import { computeToken } from './auth-middleware.js';
+import { verifyAccessToken } from '../../auth/jwt.js';
 
 export interface WSMessage {
   type: string;
@@ -34,14 +34,19 @@ export function createWSServer(server: Server, options: WSServerOptions) {
   wssInstance = wss;
 
   wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
-    // 鉴权检查
+    // 鉴权检查（JWT 模式）
     const cfg = getConfig();
     const authCfg = cfg.server?.auth;
     if (authCfg?.enabled) {
       const query = parseUrl(req.url || '', true).query;
       const token = typeof query.token === 'string' ? query.token : null;
-      const expectedToken = computeToken(authCfg.username, authCfg.password);
-      if (token !== expectedToken) {
+      if (!token) {
+        ws.close(4401, 'Unauthorized');
+        return;
+      }
+      try {
+        verifyAccessToken(token);
+      } catch {
         ws.close(4401, 'Unauthorized');
         return;
       }

@@ -5,7 +5,7 @@ import { SkillManagementSection } from './SkillManagementSection';
 import { ModelConfigSection } from './ModelConfigSection';
 import { ProfileManagementSection } from './ProfileManagementSection';
 import { EvolutionSection } from './EvolutionSection';
-import { AllowedPathsSection } from './AllowedPathsSection';
+import { PathAclSection } from './PathAclSection';
 import { ChannelManagementSection } from './ChannelManagementSection';
 import { EmailConfigSection } from './EmailConfigSection';
 import { AuthSettingsSection } from './AuthSettingsSection';
@@ -13,6 +13,8 @@ import { FirecrawlSettingsSection } from './FirecrawlSettingsSection';
 import { AgentTeamsSection } from './AgentTeamsSection';
 import { PluginManagementSection } from './PluginManagementSection';
 import { StorageManagementSection } from './StorageManagementSection';
+import { UserManagementSection } from './UserManagementSection';
+import { RoleManagementSection } from './RoleManagementSection';
 import { InstallSkillModal } from './InstallSkillModal';
 import { authFetch } from '../utils/auth';
 import { invalidateAllCache } from '../utils/configCache';
@@ -37,7 +39,7 @@ export function SettingsPanel({ isOpen, onClose }: SettingsPanelProps) {
   const [loading, setLoading] = useState(false);
   const [reloading, setReloading] = useState(false);
   const [downloadingSkills, setDownloadingSkills] = useState<Set<string>>(new Set());
-  const [activeTab, setActiveTab] = useState<'skills' | 'models' | 'profiles' | 'evolutions' | 'paths' | 'channels' | 'email' | 'auth' | 'firecrawl' | 'teams' | 'plugins' | 'storage'>('models');
+  const [activeTab, setActiveTab] = useState<'skills' | 'models' | 'profiles' | 'evolutions' | 'paths' | 'channels' | 'email' | 'auth' | 'users' | 'firecrawl' | 'teams' | 'plugins' | 'storage'>('models');
   const [activeProfile, setActiveProfile] = useState('default');
   const [installModalOpen, setInstallModalOpen] = useState(false);
   const [reloadingConfig, setReloadingConfig] = useState(false);
@@ -290,7 +292,17 @@ export function SettingsPanel({ isOpen, onClose }: SettingsPanelProps) {
                   : 'text-gray-500 border-transparent hover:text-gray-700'
               }`}
             >
-              {t('settings.auth')}
+              修改密码
+            </button>
+            <button
+              onClick={() => setActiveTab('users')}
+              className={`pb-3 text-sm font-medium border-b-2 transition-colors ${
+                activeTab === 'users'
+                  ? 'text-primary-600 border-primary-600'
+                  : 'text-gray-500 border-transparent hover:text-gray-700'
+              }`}
+            >
+              用户权限
             </button>
             <button
               onClick={() => setActiveTab('firecrawl')}
@@ -363,13 +375,18 @@ export function SettingsPanel({ isOpen, onClose }: SettingsPanelProps) {
             onProfileChange={setActiveProfile}
           />
         ) : activeTab === 'paths' ? (
-          <AllowedPathsSection key={refreshKey} />
+          <PathAclSection key={refreshKey} />
         ) : activeTab === 'channels' ? (
           <ChannelManagementSection key={refreshKey} isOpen={activeTab === 'channels'} />
         ) : activeTab === 'email' ? (
           <EmailConfigSection key={refreshKey} />
         ) : activeTab === 'auth' ? (
           <AuthSettingsSection key={refreshKey} />
+        ) : activeTab === 'users' ? (
+          <div key={refreshKey}>
+            <UserManagementSection />
+            <RoleManagementSection />
+          </div>
         ) : activeTab === 'firecrawl' ? (
           <FirecrawlSettingsSection key={refreshKey} />
         ) : activeTab === 'teams' ? (

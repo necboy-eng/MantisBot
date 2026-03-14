@@ -1,19 +1,16 @@
 // web-ui/src/components/AuthSettingsSection.tsx
-// 鉴权设置：修改用户名和密码
+// 修改密码：当前登录用户修改自己的账户密码
 
-import { useState, useEffect } from 'react';
+import { useState, useContext } from 'react';
 import { Lock, Eye, EyeOff, CheckCircle, AlertCircle } from 'lucide-react';
-import { useTranslation } from 'react-i18next';
-import { authFetch, setAuthToken } from '../utils/auth';
-import { cachedFetch, invalidateCache } from '../utils/configCache';
+import { authFetch } from '../utils/auth';
+import { AuthContext } from '../contexts/AuthContext';
 
 export function AuthSettingsSection() {
-  const { t } = useTranslation();
-  const [authEnabled, setAuthEnabled] = useState(false);
-  const [currentUsername, setCurrentUsername] = useState('');
-  const [loading, setLoading] = useState(true);
+  const { state } = useContext(AuthContext);
+  const userId = state.user?.userId;
+  const username = state.user?.username ?? '';
 
-  const [formUsername, setFormUsername] = useState('');
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -26,34 +23,34 @@ export function AuthSettingsSection() {
   const [successMsg, setSuccessMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
 
-  useEffect(() => {
-    fetchAuthStatus();
-  }, []);
+  // 密码强度
+  const strength =
+    newPassword.length === 0 ? null :
+    newPassword.length < 8   ? 'weak' :
+    newPassword.length < 12  ? 'fair' :
+    newPassword.length < 16  ? 'good' : 'strong';
 
-  async function fetchAuthStatus() {
-    try {
-      const authData = await cachedFetch('/api/auth/check', async () => {
-        const res = await authFetch('/api/auth/check');
-        return res.json();
-      }) as { authEnabled: boolean };
-      setAuthEnabled(authData.authEnabled);
-    } catch {
-      // ignore
-    } finally {
-      setLoading(false);
-    }
+  const strengthLabel = { weak: '太短', fair: '一般', good: '良好', strong: '强' };
+  const strengthColor = { weak: 'bg-red-400', fair: 'bg-yellow-400', good: 'bg-blue-400', strong: 'bg-green-400' };
+  const strengthBars  = { weak: 1, fair: 2, good: 3, strong: 4 };
 
-    try {
-      const data = await cachedFetch('/api/config', async () => {
-        const res = await authFetch('/api/config');
-        return res.json();
-      }) as { server?: { auth?: { username?: string } } };
-      const username = data.server?.auth?.username || 'admin';
-      setCurrentUsername(username);
-      setFormUsername(username);
-    } catch {
-      // ignore
-    }
+  // auth 未启用时没有用户体系，显示提示
+  if (!state.authEnabled) {
+    return (
+      <div className="p-6 max-w-md">
+        <div className="flex items-center gap-3 mb-4">
+          <Lock className="w-5 h-5 text-gray-400" />
+          <h3 className="text-base font-medium text-gray-900 dark:text-gray-100">修改密码</h3>
+        </div>
+        <div className="rounded-lg border border-yellow-200 bg-yellow-50 dark:border-yellow-800 dark:bg-yellow-900/20 p-4">
+          <p className="text-sm text-yellow-800 dark:text-yellow-300">
+            当前未启用用户鉴权，无需密码即可访问。如需启用，请在{' '}
+            <code className="font-mono text-xs bg-yellow-100 dark:bg-yellow-900/40 px-1 rounded">config.json</code>
+            {' '}中设置 <code className="font-mono text-xs bg-yellow-100 dark:bg-yellow-900/40 px-1 rounded">server.auth.enabled = true</code>。
+          </p>
+        </div>
+      </div>
+    );
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -62,216 +59,173 @@ export function AuthSettingsSection() {
     setSuccessMsg('');
 
     if (newPassword !== confirmPassword) {
-      setErrorMsg(t('auth.passwordMismatch'));
+      setErrorMsg('两次密码不一致');
       return;
     }
-    if (newPassword.length < 6) {
-      setErrorMsg(t('auth.passwordTooShort'));
+    if (newPassword.length < 8) {
+      setErrorMsg('新密码至少 8 位');
+      return;
+    }
+    if (!userId) {
+      setErrorMsg('未获取到用户信息，请重新登录');
       return;
     }
 
     setSubmitting(true);
     try {
-      const res = await authFetch('/api/config/auth', {
-        method: 'PUT',
+      const res = await authFetch(`/api/users/${userId}/change-password`, {
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          username: formUsername.trim() || currentUsername,
-          currentPassword,
-          newPassword,
-        }),
+        body: JSON.stringify({ currentPassword, newPassword }),
       });
-
       const data = await res.json();
       if (res.ok) {
-        if (data.token) {
-          setAuthToken(data.token);
-        }
-        // 密码/用户名已变更，使相关缓存失效
-        invalidateCache('/api/config', '/api/auth/check');
-        setSuccessMsg(t('auth.success'));
-        setCurrentUsername(formUsername.trim() || currentUsername);
+        setSuccessMsg('密码已修改成功');
         setCurrentPassword('');
         setNewPassword('');
         setConfirmPassword('');
       } else {
-        setErrorMsg(data.message || t('auth.updateFailed'));
+        setErrorMsg(data.message || data.error || '修改失败，请重试');
       }
     } catch {
-      setErrorMsg(t('auth.networkError'));
+      setErrorMsg('网络错误，请稍后重试');
     } finally {
       setSubmitting(false);
     }
   }
 
-  if (loading) {
-    return (
-      <div className="flex-1 overflow-y-auto p-6">
-        <p className="text-sm text-gray-500 dark:text-gray-400">{t('auth.loading')}</p>
-      </div>
-    );
-  }
-
-  if (!authEnabled) {
-    return (
-      <div className="flex-1 overflow-y-auto p-6">
-        <div className="max-w-md">
-          <div className="flex items-center gap-3 mb-4">
-            <Lock className="w-5 h-5 text-gray-400" />
-            <h3 className="text-base font-medium text-gray-900 dark:text-gray-100">{t('auth.title')}</h3>
-          </div>
-          <div className="rounded-lg border border-yellow-200 bg-yellow-50 dark:border-yellow-800 dark:bg-yellow-900/20 p-4">
-            <p className="text-sm text-yellow-800 dark:text-yellow-300">
-              {t('auth.notEnabled')}{t('auth.notEnabledHint')}{' '}
-              <code className="font-mono text-xs bg-yellow-100 dark:bg-yellow-900/40 px-1 rounded">config.json</code>
-              {' '}{t('auth.notEnabledHintSuffix')}
-            </p>
-            <pre className="mt-2 text-xs font-mono bg-yellow-100 dark:bg-yellow-900/40 rounded p-2 text-yellow-900 dark:text-yellow-200 overflow-x-auto">{`"server": {
-  "auth": {
-    "enabled": true,
-    "username": "admin",
-    "password": "your-password"
-  }
-}`}</pre>
-          </div>
-        </div>
-      </div>
-    );
-  }
+  const inputClass = 'w-full px-3 py-2 pr-10 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent text-sm';
 
   return (
-    <div className="flex-1 overflow-y-auto p-6">
-      <div className="max-w-md">
-        <div className="flex items-center gap-3 mb-6">
-          <Lock className="w-5 h-5 text-primary-500" />
-          <h3 className="text-base font-medium text-gray-900 dark:text-gray-100">{t('auth.changeCredentials')}</h3>
+    <div className="p-6 max-w-md">
+      <div className="flex items-center gap-3 mb-2">
+        <Lock className="w-5 h-5 text-primary-500" />
+        <h3 className="text-base font-medium text-gray-900 dark:text-gray-100">修改密码</h3>
+      </div>
+      <p className="text-sm text-gray-500 dark:text-gray-400 mb-6">
+        当前账户：<span className="font-medium text-gray-700 dark:text-gray-300">{username}</span>
+      </p>
+
+      <form onSubmit={handleSubmit} className="space-y-4">
+        {/* 当前密码 */}
+        <div>
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+            当前密码 <span className="text-red-500">*</span>
+          </label>
+          <div className="relative">
+            <input
+              type={showCurrent ? 'text' : 'password'}
+              value={currentPassword}
+              onChange={e => setCurrentPassword(e.target.value)}
+              placeholder="请输入当前密码"
+              required
+              autoComplete="current-password"
+              className={inputClass}
+            />
+            <button
+              type="button"
+              onClick={() => setShowCurrent(v => !v)}
+              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+              tabIndex={-1}
+            >
+              {showCurrent ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+            </button>
+          </div>
         </div>
 
-        <p className="text-sm text-gray-500 dark:text-gray-400 mb-6">
-          {t('auth.currentUsername')}<span className="font-medium text-gray-700 dark:text-gray-300">{currentUsername}</span>
-        </p>
-
-        <form onSubmit={handleSubmit} className="space-y-4">
-          {/* 新用户名 */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-              {t('auth.newUsername')} <span className="text-gray-400 font-normal">（{t('auth.newUsernamePlaceholder')}）</span>
-            </label>
+        {/* 新密码 */}
+        <div>
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+            新密码 <span className="text-gray-400 font-normal">（至少 8 位）</span>
+            <span className="text-red-500"> *</span>
+          </label>
+          <div className="relative">
             <input
-              type="text"
-              value={formUsername}
-              onChange={e => setFormUsername(e.target.value)}
-              placeholder={currentUsername}
-              autoComplete="username"
-              className="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent text-sm"
+              type={showNew ? 'text' : 'password'}
+              value={newPassword}
+              onChange={e => setNewPassword(e.target.value)}
+              placeholder="请输入新密码"
+              required
+              autoComplete="new-password"
+              className={inputClass}
             />
+            <button
+              type="button"
+              onClick={() => setShowNew(v => !v)}
+              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+              tabIndex={-1}
+            >
+              {showNew ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+            </button>
           </div>
-
-          {/* 当前密码 */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-              {t('auth.currentPassword')} <span className="text-red-500">*</span>
-            </label>
-            <div className="relative">
-              <input
-                type={showCurrent ? 'text' : 'password'}
-                value={currentPassword}
-                onChange={e => setCurrentPassword(e.target.value)}
-                placeholder={t('auth.currentPasswordPlaceholder')}
-                required
-                autoComplete="current-password"
-                className="w-full px-3 py-2 pr-10 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent text-sm"
-              />
-              <button
-                type="button"
-                onClick={() => setShowCurrent(v => !v)}
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
-                tabIndex={-1}
-              >
-                {showCurrent ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-              </button>
-            </div>
-          </div>
-
-          {/* 新密码 */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-              {t('auth.newPassword')} <span className="text-red-500">*</span>
-            </label>
-            <div className="relative">
-              <input
-                type={showNew ? 'text' : 'password'}
-                value={newPassword}
-                onChange={e => setNewPassword(e.target.value)}
-                placeholder={t('auth.newPasswordPlaceholder')}
-                required
-                autoComplete="new-password"
-                className="w-full px-3 py-2 pr-10 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent text-sm"
-              />
-              <button
-                type="button"
-                onClick={() => setShowNew(v => !v)}
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
-                tabIndex={-1}
-              >
-                {showNew ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-              </button>
-            </div>
-          </div>
-
-          {/* 确认新密码 */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-              {t('auth.confirmPassword')} <span className="text-red-500">*</span>
-            </label>
-            <div className="relative">
-              <input
-                type={showConfirm ? 'text' : 'password'}
-                value={confirmPassword}
-                onChange={e => setConfirmPassword(e.target.value)}
-                placeholder={t('auth.confirmPasswordPlaceholder')}
-                required
-                autoComplete="new-password"
-                className="w-full px-3 py-2 pr-10 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent text-sm"
-              />
-              <button
-                type="button"
-                onClick={() => setShowConfirm(v => !v)}
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
-                tabIndex={-1}
-              >
-                {showConfirm ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-              </button>
-            </div>
-          </div>
-
-          {/* 反馈信息 */}
-          {errorMsg && (
-            <div className="flex items-center gap-2 text-sm text-red-600 dark:text-red-400">
-              <AlertCircle className="w-4 h-4 flex-shrink-0" />
-              <span>{errorMsg}</span>
+          {/* 密码强度条 */}
+          {strength && (
+            <div className="mt-1.5 flex items-center gap-1">
+              {[0, 1, 2, 3].map(i => (
+                <div
+                  key={i}
+                  className={`h-1 flex-1 rounded-full transition-colors ${
+                    i < strengthBars[strength] ? strengthColor[strength] : 'bg-gray-200 dark:bg-gray-700'
+                  }`}
+                />
+              ))}
+              <span className="text-xs text-gray-400 ml-1">{strengthLabel[strength]}</span>
             </div>
           )}
-          {successMsg && (
-            <div className="flex items-center gap-2 text-sm text-green-600 dark:text-green-400">
-              <CheckCircle className="w-4 h-4 flex-shrink-0" />
-              <span>{successMsg}</span>
-            </div>
-          )}
+        </div>
 
-          <button
-            type="submit"
-            disabled={submitting || !currentPassword || !newPassword || !confirmPassword}
-            className="w-full py-2.5 px-4 bg-primary-600 hover:bg-primary-700 disabled:bg-primary-400 text-white font-medium rounded-lg transition-colors text-sm"
-          >
-            {submitting ? t('auth.submitting') : t('auth.submit')}
-          </button>
-        </form>
+        {/* 确认新密码 */}
+        <div>
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+            确认新密码 <span className="text-red-500">*</span>
+          </label>
+          <div className="relative">
+            <input
+              type={showConfirm ? 'text' : 'password'}
+              value={confirmPassword}
+              onChange={e => setConfirmPassword(e.target.value)}
+              placeholder="再次输入新密码"
+              required
+              autoComplete="new-password"
+              className={`w-full px-3 py-2 pr-10 rounded-lg border bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:border-transparent text-sm ${
+                confirmPassword && confirmPassword !== newPassword
+                  ? 'border-red-400 focus:ring-red-400'
+                  : 'border-gray-300 dark:border-gray-600 focus:ring-primary-500'
+              }`}
+            />
+            <button
+              type="button"
+              onClick={() => setShowConfirm(v => !v)}
+              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+              tabIndex={-1}
+            >
+              {showConfirm ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+            </button>
+          </div>
+        </div>
 
-        <p className="mt-4 text-xs text-gray-400 dark:text-gray-500">
-          {t('auth.storageNote')}
-        </p>
-      </div>
+        {/* 反馈 */}
+        {errorMsg && (
+          <div className="flex items-center gap-2 text-sm text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg px-3 py-2">
+            <AlertCircle className="w-4 h-4 flex-shrink-0" />
+            <span>{errorMsg}</span>
+          </div>
+        )}
+        {successMsg && (
+          <div className="flex items-center gap-2 text-sm text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg px-3 py-2">
+            <CheckCircle className="w-4 h-4 flex-shrink-0" />
+            <span>{successMsg}</span>
+          </div>
+        )}
+
+        <button
+          type="submit"
+          disabled={submitting || !currentPassword || newPassword.length < 8 || newPassword !== confirmPassword}
+          className="w-full py-2.5 px-4 bg-primary-600 hover:bg-primary-700 disabled:bg-primary-400 text-white font-medium rounded-lg transition-colors text-sm"
+        >
+          {submitting ? '修改中...' : '确认修改'}
+        </button>
+      </form>
     </div>
   );
 }

@@ -15,6 +15,7 @@ export interface FileItem {
   size?: number;
   ext?: string;
   fileApiUrl?: string;  // /api/files/xxx.png 格式的 URL（用于直接访问保存的附件）
+  aclPermission?: 'read' | 'write' | 'deny' | null;  // 该路径的 ACL 权限类型（null = 无规则）
 }
 
 interface PreviewPaneProps {

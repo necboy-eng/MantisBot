@@ -2,7 +2,7 @@
  * 浏览器工具注册
  */
 
-import type { Tool } from './types.js';
+import type { Tool } from '../../types.js';
 import { browserManager } from '../browser/types.js';
 import * as browserOps from '../browser/operations.js';
 import { getFileStorage } from '../../files/storage.js';

@@ -2,6 +2,9 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { FileItem } from './PreviewPane';
 import { StorageSelector } from './StorageSelector';
 import { authFetch, appendTokenToUrl, getAuthToken } from '../utils/auth';
+import { usePermission } from '../hooks/usePermission';
+import { PathAclDialog } from './PathAclDialog';
+import { createPortal } from 'react-dom';
 
 type ViewMode = 'icons' | 'list' | 'columns';
 type SortField = 'name' | 'size' | 'modified';
@@ -39,6 +42,7 @@ interface FileSystemItem {
   modified?: string;
   ext?: string;
   storageId?: string;  // 当前存储提供者 ID（NAS 时有值，本地时为 undefined）
+  aclPermission?: 'read' | 'write' | 'deny' | null;  // 该路径的 ACL 权限类型（null = 无规则）
 }
 
 // 格式化文件大小
@@ -92,6 +96,28 @@ function getFileIcon(item: FileSystemItem): string {
   return iconMap[ext] || '📄';
 }
 
+// 根据 ACL 权限类型返回对应徽标
+function AclBadge({ permission, overlay = false }: { permission?: 'read' | 'write' | 'deny' | null; overlay?: boolean }) {
+  if (!permission) return null;
+  const cfg = {
+    read:  { icon: '🔏', title: '只读权限' },
+    write: { icon: '🔓', title: '读写权限' },
+    deny:  { icon: '🔐', title: '禁止访问' },
+  }[permission];
+  if (overlay) {
+    return (
+      <span className="absolute -bottom-1 -right-1 text-xs leading-none" title={cfg.title}>
+        {cfg.icon}
+      </span>
+    );
+  }
+  return (
+    <span className="ml-1.5 text-xs flex-shrink-0" title={cfg.title}>
+      {cfg.icon}
+    </span>
+  );
+}
+
 export function FileManager({
   onFileSelect,
   onSwitchToPreview,
@@ -100,7 +126,6 @@ export function FileManager({
   officePreviewServer,
   serverUrl,
   onAddReference,
-  onPermissionError,
   onStorageModeChange,
 }: FileManagerProps) {
   const [viewMode, setViewMode] = useState<ViewMode>('list');  // 默认使用列表视图
@@ -124,6 +149,11 @@ export function FileManager({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dropZoneRef = useRef<HTMLDivElement>(null);
   const dragCounterRef = useRef(0);
+
+  // 权限：是否有用户管理权限（用于显示「设置权限」菜单项）
+  const canManage = usePermission('manageUsers');
+  // 路径 ACL 对话框目标
+  const [aclTarget, setAclTarget] = useState<{ path: string; storageId: string } | null>(null);
   // 请求版本号：切换存储时递增，让旧的 in-flight 请求响应被丢弃
   const loadGenerationRef = useRef(0);
 
@@ -184,17 +214,9 @@ export function FileManager({
 
       // 检查是否有权限错误
       if (res.status === 403) {
-        const data = await res.json();
-        // 如果有权限错误回调，调用它
-        if (onPermissionError) {
-          onPermissionError(dirPath, () => {
-            // 用户添加权限后，重新加载目录
-            loadDirectory(dirPath);
-          });
-        } else {
-          console.error('Permission denied:', data.error);
-          alert(data.error || 'Permission denied');
-        }
+        // 不更新路径、不触发 onPathChange，直接提示无权限
+        setToast({ visible: true, message: `无权限访问：${dirPath}`, type: 'error' });
+        setTimeout(() => setToast({ visible: false, message: '', type: 'success' }), 3000);
         return;
       }
 
@@ -223,7 +245,7 @@ export function FileManager({
         setLoading(false);
       }
     }
-  }, [history, historyIndex, onPathChange, onPermissionError]);
+  }, [history, historyIndex, onPathChange]);
 
   // 初始加载 - 当 initialPath 变化时重新加载
   useEffect(() => {
@@ -272,10 +294,18 @@ export function FileManager({
   };
 
   // 双击打开
-  const handleDoubleClick = (item: FileSystemItem) => {
+  const handleDoubleClick = async (item: FileSystemItem) => {
     if (item.type === 'directory') {
       navigateTo(item.path);
     } else {
+      // 先检查文件读权限（stat 请求）
+      const statRes = await authFetch(`/api/explore/stat?path=${encodeURIComponent(item.path)}`);
+      if (statRes.status === 403) {
+        setToast({ visible: true, message: `无权限访问：${item.name}`, type: 'error' });
+        setTimeout(() => setToast({ visible: false, message: '', type: 'success' }), 3000);
+        return;
+      }
+
       // 判断是否为 Office 文件
       const officeExtensions = ['doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx'];
       const ext = item.ext?.toLowerCase().replace('.', '') || '';
@@ -894,7 +924,10 @@ export function FileManager({
           onDoubleClick={() => handleDoubleClick(item)}
           onContextMenu={(e) => handleContextMenu(e, item)}
         >
-          <span className="text-3xl mb-1">{getFileIcon(item)}</span>
+          <span className="text-3xl mb-1 relative">
+            {getFileIcon(item)}
+            <AclBadge permission={item.aclPermission} overlay />
+          </span>
           <span className="text-xs text-center dark:text-white truncate w-full">{item.name}</span>
         </div>
       ))}
@@ -977,6 +1010,7 @@ export function FileManager({
               <div className="flex items-center flex-1 min-w-0">
                 <span className="text-xl mr-3">{getFileIcon(item)}</span>
                 <span className="truncate dark:text-white">{item.name}</span>
+                <AclBadge permission={item.aclPermission} />
               </div>
               <div className="w-24 text-right text-sm text-gray-500 dark:text-gray-400">
                 {item.type === 'directory' ? '--' : formatSize(item.size)}
@@ -1024,6 +1058,7 @@ export function FileManager({
   );
 
   return (
+    <>
     <div className="flex flex-col h-full bg-white dark:bg-gray-800">
       {/* 隐藏的文件输入 */}
       <input
@@ -1328,6 +1363,25 @@ export function FileManager({
                   <span>🗑️</span>
                   <span>删除</span>
                 </button>
+                {canManage && contextMenu.item && (
+                  <>
+                    <div className="border-t border-gray-200 dark:border-gray-700 my-1" />
+                    <button
+                      onClick={() => {
+                        const item = contextMenu.item!;
+                        closeContextMenu();
+                        setAclTarget({
+                          path: item.path,
+                          storageId: currentStorageId ? currentStorageId : 'local',
+                        });
+                      }}
+                      className="w-full px-4 py-2 text-left hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2 dark:text-white"
+                    >
+                      <span>🛡️</span>
+                      <span>设置权限</span>
+                    </button>
+                  </>
+                )}
               </>
             ) : (
               <>
@@ -1577,6 +1631,17 @@ export function FileManager({
         </div>
       )}
     </div>
+
+    {/* 路径 ACL 对话框 —— Portal 到 body */}
+    {aclTarget && createPortal(
+      <PathAclDialog
+        targetPath={aclTarget.path}
+        storageId={aclTarget.storageId}
+        onClose={() => setAclTarget(null)}
+      />,
+      document.body
+    )}
+    </>
   );
 }
 

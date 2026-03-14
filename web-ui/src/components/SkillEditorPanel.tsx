@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { X, Save, Loader2, AlertCircle, ChevronRight } from 'lucide-react';
+import { X, Save, Loader2, AlertCircle, ChevronRight, Lock } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 interface Skill {
@@ -16,9 +16,10 @@ interface SkillEditorPanelProps {
   onLoadFiles: (skillName: string) => Promise<string[]>;
   onLoadContent: (skillName: string, filePath: string) => Promise<string>;
   onSaveContent: (skillName: string, filePath: string, content: string) => Promise<boolean>;
+  readOnly?: boolean;
 }
 
-export function SkillEditorPanel({ skill, onClose, onLoadFiles, onLoadContent, onSaveContent }: SkillEditorPanelProps) {
+export function SkillEditorPanel({ skill, onClose, onLoadFiles, onLoadContent, onSaveContent, readOnly = false }: SkillEditorPanelProps) {
   const { t } = useTranslation();
   const [files, setFiles] = useState<string[]>([]);
   const [selectedFile, setSelectedFile] = useState('');
@@ -92,12 +93,18 @@ export function SkillEditorPanel({ skill, onClose, onLoadFiles, onLoadContent, o
           <span className="font-semibold text-sm text-gray-900 dark:text-gray-100 truncate">
             {skill.name}
           </span>
-          {isDirty && (
+          {readOnly && (
+            <span className="flex items-center gap-1 text-xs px-1.5 py-0.5 bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 rounded flex-shrink-0">
+              <Lock className="w-3 h-3" />
+              只读
+            </span>
+          )}
+          {!readOnly && isDirty && (
             <span className="text-xs px-1.5 py-0.5 bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 rounded flex-shrink-0">
               {t('skillEditor.unsaved')}
             </span>
           )}
-          {saveSuccess && (
+          {saveSuccess && !readOnly && (
             <span className="text-xs px-1.5 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 rounded flex-shrink-0">
               {t('skillEditor.saved')}
             </span>
@@ -150,8 +157,9 @@ export function SkillEditorPanel({ skill, onClose, onLoadFiles, onLoadContent, o
           ) : (
             <textarea
               value={content}
-              onChange={e => setContent(e.target.value)}
-              className="flex-1 w-full p-4 font-mono text-xs resize-none bg-transparent text-gray-900 dark:text-gray-100 focus:outline-none"
+              onChange={e => { if (!readOnly) setContent(e.target.value); }}
+              readOnly={readOnly}
+              className={`flex-1 w-full p-4 font-mono text-xs resize-none bg-transparent text-gray-900 dark:text-gray-100 focus:outline-none ${readOnly ? 'cursor-default select-text' : ''}`}
               spellCheck={false}
               placeholder={t('skillEditor.placeholder')}
             />
@@ -169,14 +177,21 @@ export function SkillEditorPanel({ skill, onClose, onLoadFiles, onLoadContent, o
         ) : (
           <span className="text-xs text-gray-400 truncate">{selectedFile}</span>
         )}
-        <button
-          onClick={handleSave}
-          disabled={!isDirty || saving}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors ml-4 flex-shrink-0"
-        >
-          {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
-          {t('skillEditor.save')}
-        </button>
+        {readOnly ? (
+          <span className="flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-400 ml-4 flex-shrink-0">
+            <Lock className="w-3.5 h-3.5" />
+            无编辑权限
+          </span>
+        ) : (
+          <button
+            onClick={handleSave}
+            disabled={!isDirty || saving}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors ml-4 flex-shrink-0"
+          >
+            {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+            {t('skillEditor.save')}
+          </button>
+        )}
       </div>
     </div>
   );

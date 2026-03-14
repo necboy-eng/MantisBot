@@ -6,7 +6,7 @@ import { ToolRegistry } from './tools/registry.js';
 import type { SkillsLoader } from './skills/loader.js';
 import { formatSkillsForPrompt } from '@mariozechner/pi-coding-agent';
 import { getGlobalPluginLoader } from '../plugins/loader.js';
-import type { ToolInfo } from '../types.js';
+import type { ToolInfo, ToolUserContext } from '../types.js';
 import type { LLMMessage, FileAttachment } from '../types.js';
 import type { PermissionResult } from '@anthropic-ai/claude-agent-sdk';
 import { getConfig } from '../config/loader.js';
@@ -15,6 +15,7 @@ import { getFileStorage } from '../files/storage.js';
 import { workDirManager } from '../workdir/manager.js';
 import { buildSdkAgents } from './agent-teams.js';
 import { z } from 'zod';
+import { resolveAccess } from '../auth/path-acl-store.js';
 
 // 审批模式类型
 export type ApprovalMode = 'auto' | 'ask' | 'dangerous';
@@ -354,7 +355,7 @@ export class ClaudeAgentRunner extends EventEmitter {
   private abortController: AbortController | null = null;
 
   // 用户上下文（由 UnifiedAgentRunner.setUserContext 设置）
-  userContext?: { userId?: string; platform?: string };
+  userContext?: { userId?: string; roleId?: string; platform?: string };
 
   // 获取当前的 claudeSessionId
   getClaudeSessionId(): string | null {
@@ -555,7 +556,17 @@ export class ClaudeAgentRunner extends EventEmitter {
         this.jsonSchemaToZod(toolInfo.parameters),
         async (args: Record<string, unknown>) => {
           try {
-            const result = await toolRegistry.execute(toolInfo.name, args);
+            // 构建 ACL 用户上下文（仅在有 userId + roleId 时生效）
+            console.log(`[ClaudeAgentRunner] Tool ${toolInfo.name} executing, userContext:`, JSON.stringify(this.userContext));
+            const aclCtx: ToolUserContext | undefined =
+              (this.userContext?.userId && this.userContext?.roleId)
+                ? { userId: this.userContext.userId, roleId: this.userContext.roleId }
+                : undefined;
+
+            console.log(`[ClaudeAgentRunner] ACL context for tool ${toolInfo.name}:`, JSON.stringify(aclCtx));
+
+            // 直接执行工具（ACL 检查已在 canUseTool 回调中完成）
+            const result = await toolRegistry.execute(toolInfo.name, args, aclCtx);
 
             // 截断结果
             const resultStr = JSON.stringify(result);
@@ -816,10 +827,17 @@ export class ClaudeAgentRunner extends EventEmitter {
               toolContext.platform = this.userContext.platform;
             }
 
+            // 构建 ACL 用户上下文（仅在有 userId + roleId 时生效）
+            const aclCtx: ToolUserContext | undefined =
+              (this.userContext?.userId && this.userContext?.roleId)
+                ? { userId: this.userContext.userId, roleId: this.userContext.roleId }
+                : undefined;
+
+            // 直接执行工具（ACL 检查已在 canUseTool 回调中完成）
             const result = await this.toolRegistry.execute(
               toolInfo.name,
               toolArgs,
-              Object.keys(toolContext).length > 0 ? toolContext : undefined
+              aclCtx ?? (Object.keys(toolContext).length > 0 ? (toolContext as any) : undefined)
             );
             collectAttachments(result, attachments);
             console.log('[ClaudeAgentRunner] After collectAttachments, total attachments:', attachments.length);
@@ -993,6 +1011,206 @@ export class ClaudeAgentRunner extends EventEmitter {
             hooks: [async (_input: unknown) => ({})]
           }
         ],
+        // PreToolUse hook：在工具执行前进行 Path ACL 权限检查
+        PreToolUse: [
+          {
+            hooks: [
+              async (input: unknown): Promise<{
+                decision?: 'approve' | 'block';
+                reason?: string;
+                hookSpecificOutput?: {
+                  hookEventName: 'PreToolUse';
+                  permissionDecision?: 'allow' | 'deny';
+                  permissionDecisionReason?: string;
+                };
+              }> => {
+                console.log('[ClaudeAgentRunner] PreToolUse hook RAW input:', JSON.stringify(input).slice(0, 500));
+                const typedInput = input as { tool_name?: string; tool_input?: unknown };
+                const toolName = typedInput?.tool_name || 'unknown';
+                const toolInput = typedInput?.tool_input;
+
+                console.log('[ClaudeAgentRunner] PreToolUse hook called for:', toolName);
+
+                const userId = this.userContext?.userId;
+                const roleId = this.userContext?.roleId;
+
+                // Path ACL 权限检查（对文件操作工具）
+                const FILE_TOOLS = new Set(['Read', 'Write', 'Edit']);
+                if (FILE_TOOLS.has(toolName)) {
+                  const resolvedInput = toolInput && typeof toolInput === 'object'
+                    ? toolInput as Record<string, unknown>
+                    : {};
+                  const filePath = String(resolvedInput.file_path || resolvedInput.path || '');
+
+                  console.log('[ClaudeAgentRunner] PreToolUse ACL check:', { toolName, filePath, userId, roleId });
+
+                  if (filePath && userId && roleId) {
+                    // role_admin 跳过 ACL 检查
+                    if (roleId !== 'role_admin') {
+                      const required = (toolName === 'Write' || toolName === 'Edit') ? 'write' : 'read';
+                      const aclResult = resolveAccess({
+                        roleId: roleId,
+                        userId: userId,
+                        storageId: 'local',
+                        requestPath: filePath,
+                        requiredPermission: required,
+                      });
+                      console.log(`[ClaudeAgentRunner] PreToolUse ACL result for ${filePath}:`, JSON.stringify(aclResult));
+                      if (!aclResult.granted) {
+                        const action = required === 'write' ? '写' : '读';
+                        const denyMessage = `路径 "${filePath}" 无${action}权限（ACL 拒绝）`;
+                        console.log(`[ClaudeAgentRunner] PreToolUse ACL denied: ${denyMessage}`);
+                        const denyResult = {
+                          decision: 'block' as const,
+                          reason: denyMessage,
+                          hookSpecificOutput: {
+                            hookEventName: 'PreToolUse' as const,
+                            permissionDecision: 'deny' as const,
+                            permissionDecisionReason: denyMessage,
+                          },
+                        };
+                        console.log('[ClaudeAgentRunner] PreToolUse returning DENY:', JSON.stringify(denyResult));
+                        return denyResult;
+                      }
+                    }
+                  }
+                }
+
+                // Bash 工具的路径 ACL 检查
+                if (toolName === 'Bash' && userId && roleId && roleId !== 'role_admin') {
+                  const resolvedInput = toolInput && typeof toolInput === 'object'
+                    ? toolInput as Record<string, unknown>
+                    : {};
+                  const command = String(resolvedInput.command || '');
+                  // 从 hook input 获取 cwd
+                  const cwd = String((typedInput as { cwd?: string })?.cwd || '/');
+
+                  // 辅助函数：检查命令是否为写入操作
+                  const isWriteCommand = (cmd: string): boolean => {
+                    // 写入相关的命令和模式
+                    const writePatterns = [
+                      /\b(cat|echo|printf)\s+.*>>/,           // cat/echo/printf 追加
+                      />>/,                                    // 追加重定向
+                      /\b(cat|echo|printf)\s+.*[^>]>[^>]/,    // 单个 > (非 >>)
+                      /\b>\s*(?!\S*\/)/,                       // > 重定向（相对路径）
+                      /\b>\s*\//,                              // > 重定向到绝对路径
+                      /\btee\s+(-a|--append)?\s*\//,          // tee 写入
+                      /\bsed\s+(-i|--in-place)/,              // sed 原地修改
+                      /\bperl\s+(-i|--inplace)/,              // perl 原地修改
+                      /\bawk\s+.*>\s*\//,                     // awk 输出重定向
+                      /\bpython.*-c.*open\([^)]*['"](w|a)['"]/, // python 写入
+                      /\btouch\b/,                            // touch 创建文件
+                      /\bmkdir\b/,                            // mkdir 创建目录
+                      /\brm\b/,                               // rm 删除文件
+                      /\brmdir\b/,                            // rmdir 删除目录
+                      /\bmv\b/,                               // mv 移动/重命名
+                      /\bcp\b/,                               // cp 复制
+                      /\bchmod\b/,                            // chmod 修改权限
+                      /\bchown\b/,                            // chown 修改所有者
+                      /\bdd\s+.*of=/,                         // dd 写入
+                      /\btruncate\b/,                         // truncate 截断
+                      /\binstall\b/,                          // install 安装文件
+                      /\bgit\s+checkout\s+--/,                // git checkout 修改文件
+                      /\bgit\s+clone\b/,                      // git clone 到本地
+                      /\bgit\s+pull\b/,                       // git pull 可能修改文件
+                      /\bgit\s+push\b/,                       // git push
+                      /\bunzip\b/,                            // unzip 解压
+                      /\btar\b/,                              // tar 解压
+                      /\bcurl\s+.*-o\b/,                      // curl 下载到文件
+                      /\bwget\s+.*-O\b/,                      // wget 下载到文件
+                    ];
+                    return writePatterns.some(p => p.test(cmd));
+                  };
+
+                  // 从命令中提取可能的文件路径（绝对路径）
+                  const pathRegex = /(?:^|\s|['"])(\/[^\s'"]+)/g;
+                  const paths: string[] = [];
+                  let match;
+                  while ((match = pathRegex.exec(command)) !== null) {
+                    paths.push(match[1]);
+                  }
+
+                  console.log('[ClaudeAgentRunner] PreToolUse Bash ACL check:', { command, cwd, extractedPaths: paths });
+
+                  // 如果命令包含任何写入模式，所有路径都需要检查写权限
+                  // 这样更安全，因为很难精确判断哪个路径是写入目标
+                  const isWrite = isWriteCommand(command);
+                  const required = isWrite ? 'write' : 'read';
+
+                  console.log(`[ClaudeAgentRunner] PreToolUse Bash detected as ${isWrite ? 'WRITE' : 'READ'} operation`);
+
+                  // 如果没有提取到绝对路径，但检测到是写入操作，检查 cwd 权限
+                  if (paths.length === 0 && isWrite) {
+                    console.log(`[ClaudeAgentRunner] PreToolUse Bash: no absolute paths, checking cwd: ${cwd}`);
+                    const aclResult = resolveAccess({
+                      roleId: roleId,
+                      userId: userId,
+                      storageId: 'local',
+                      requestPath: cwd,
+                      requiredPermission: 'write',
+                    });
+
+                    console.log(`[ClaudeAgentRunner] PreToolUse Bash ACL result for cwd ${cwd}:`, JSON.stringify(aclResult));
+
+                    if (!aclResult.granted) {
+                      const denyMessage = `Bash 写入操作在目录 "${cwd}" 无写权限（ACL 拒绝）`;
+                      console.log(`[ClaudeAgentRunner] PreToolUse Bash ACL denied: ${denyMessage}`);
+                      const denyResult = {
+                        decision: 'block' as const,
+                        reason: denyMessage,
+                        hookSpecificOutput: {
+                          hookEventName: 'PreToolUse' as const,
+                          permissionDecision: 'deny' as const,
+                          permissionDecisionReason: denyMessage,
+                        },
+                      };
+                      console.log('[ClaudeAgentRunner] PreToolUse returning DENY:', JSON.stringify(denyResult));
+                      return denyResult;
+                    }
+                  }
+
+                  // 检查每个路径的 ACL 权限
+                  for (const extractedPath of paths) {
+                    const aclResult = resolveAccess({
+                      roleId: roleId,
+                      userId: userId,
+                      storageId: 'local',
+                      requestPath: extractedPath,
+                      requiredPermission: required,
+                    });
+
+                    console.log(`[ClaudeAgentRunner] PreToolUse Bash ACL result for ${extractedPath}:`, JSON.stringify(aclResult));
+
+                    if (!aclResult.granted) {
+                      const action = required === 'write' ? '写' : '读';
+                      const denyMessage = `Bash 命令访问的路径 "${extractedPath}" 无${action}权限（ACL 拒绝）`;
+                      console.log(`[ClaudeAgentRunner] PreToolUse Bash ACL denied: ${denyMessage}`);
+                      const denyResult = {
+                        decision: 'block' as const,
+                        reason: denyMessage,
+                        hookSpecificOutput: {
+                          hookEventName: 'PreToolUse' as const,
+                          permissionDecision: 'deny' as const,
+                          permissionDecisionReason: denyMessage,
+                        },
+                      };
+                      console.log('[ClaudeAgentRunner] PreToolUse returning DENY:', JSON.stringify(denyResult));
+                      return denyResult;
+                    }
+                  }
+                }
+
+                // 默认允许
+                return {
+                  hookSpecificOutput: {
+                    hookEventName: 'PreToolUse',
+                    permissionDecision: 'allow',
+                  },
+                };
+              }
+            ]
+          }
+        ],
       },
       // 合并 mantis-tools 内置 MCP 服务器与插件 MCP 服务器
       // 注意：必须在同一个 mcpServers 对象内合并，不能分开展开——
@@ -1033,6 +1251,34 @@ export class ClaudeAgentRunner extends EventEmitter {
           : { value: toolInput };
 
         console.log('[ClaudeAgentRunner] canUseTool called for:', resolvedName, 'approvalMode:', this.options.approvalMode, 'input:', JSON.stringify(resolvedInput).slice(0, 200));
+
+        // ===== Path ACL 权限检查（对文件操作工具） =====
+        const FILE_TOOLS = new Set(['Read', 'Write', 'Edit', 'read', 'write', 'edit']);
+        if (FILE_TOOLS.has(resolvedName)) {
+          const filePath = String(resolvedInput.file_path || resolvedInput.path || '');
+          const userId = this.userContext?.userId;
+          const roleId = this.userContext?.roleId;
+          if (filePath && userId && roleId) {
+            // role_admin 跳过 ACL 检查
+            if (roleId !== 'role_admin') {
+              const required = (resolvedName === 'Write' || resolvedName === 'write' || resolvedName === 'Edit' || resolvedName === 'edit') ? 'write' : 'read';
+              const aclResult = resolveAccess({
+                roleId: roleId,
+                userId: userId,
+                storageId: 'local',
+                requestPath: filePath,
+                requiredPermission: required,
+              });
+              console.log(`[ClaudeAgentRunner] ACL check for ${resolvedName} on ${filePath}:`, JSON.stringify(aclResult));
+              if (!aclResult.granted) {
+                const action = required === 'write' ? '写' : '读';
+                const denyMessage = `路径 "${filePath}" 无${action}权限（ACL 拒绝）`;
+                console.log(`[ClaudeAgentRunner] ACL denied: ${denyMessage}`);
+                return { behavior: 'deny', message: denyMessage };
+              }
+            }
+          }
+        }
 
         // AskUserQuestion 需要用户交互，任何模式下都需要询问
         if (resolvedName === 'AskUserQuestion' || resolvedName === 'askuserquestion') {
@@ -1157,6 +1403,9 @@ export class ClaudeAgentRunner extends EventEmitter {
       }
 
       const queryResult = query(queryParams as any);
+
+      // 调试：确认 canUseTool 被正确注册
+      console.log('[ClaudeAgentRunner] Query started, canUseTool registered:', typeof options.canUseTool === 'function');
 
       console.log('[ClaudeAgentRunner] Query result type:', typeof queryResult, queryResult ? 'object' : 'null');
       if (!queryResult || typeof queryResult !== 'object') {

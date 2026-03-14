@@ -1,14 +1,14 @@
 // src/channels/http-ws/auth-middleware.ts
-// 简单的 HMAC-based 无状态访问验证
+// 兼容层：保留旧版导出供现有代码使用，内部使用新 JWT 鉴权逻辑
+// Deprecated: 直接使用 src/channels/http-ws/middleware/authenticate.ts
 
 import { createHmac, createHash } from 'crypto';
-import type { Request, Response, NextFunction } from 'express';
-import { getConfig } from '../../config/loader.js';
 
 const HMAC_SECRET = 'mantisbot-auth-secret';
 
 /**
  * 对明文密码进行 SHA-256 哈希，返回 "sha256:<hex>" 格式
+ * @deprecated 使用 src/auth/password.ts 的 hashPassword（argon2）
  */
 export function hashPassword(plain: string): string {
   const hex = createHash('sha256').update(plain).digest('hex');
@@ -18,6 +18,7 @@ export function hashPassword(plain: string): string {
 /**
  * 验证提交的明文密码是否与存储值匹配
  * 存储值可以是 "sha256:<hex>"（哈希）或明文（旧格式）
+ * @deprecated 使用 src/auth/password.ts 的 verifyPassword（argon2）
  */
 export function verifyPassword(submitted: string, stored: string): boolean {
   if (stored.startsWith('sha256:')) {
@@ -29,8 +30,8 @@ export function verifyPassword(submitted: string, stored: string): boolean {
 }
 
 /**
- * 根据用户名和存储密码值计算期望的 token（无状态，重启后仍有效）
- * 注意：使用存储值（可能是哈希）而非明文，确保 token 与存储值绑定
+ * 根据用户名和存储密码值计算期望的 token（旧 HMAC 模式）
+ * @deprecated 不再使用 HMAC token，请使用 JWT 认证（/auth/login）
  */
 export function computeToken(username: string, storedPassword: string): string {
   return createHmac('sha256', HMAC_SECRET)
@@ -39,44 +40,7 @@ export function computeToken(username: string, storedPassword: string): string {
 }
 
 /**
- * 从 Authorization 头或 query param 中提取 token
+ * 创建 Express 鉴权中间件（兼容层，内部委托给新 JWT 中间件）
+ * @deprecated 使用 src/channels/http-ws/middleware/authenticate.ts 的 createAuthMiddleware
  */
-function extractToken(req: Request): string | null {
-  const authHeader = req.headers['authorization'];
-  if (authHeader?.startsWith('Bearer ')) {
-    return authHeader.slice(7);
-  }
-  const queryToken = req.query?.token;
-  if (typeof queryToken === 'string' && queryToken) {
-    return queryToken;
-  }
-  return null;
-}
-
-/**
- * 创建 Express 鉴权中间件
- * 若 config.server.auth.enabled 为 false 或未配置，直接放行
- */
-export function createAuthMiddleware() {
-  return (req: Request, res: Response, next: NextFunction) => {
-    const config = getConfig();
-    const authConfig = config.server?.auth;
-
-    // 未启用鉴权，直接放行
-    if (!authConfig?.enabled) {
-      return next();
-    }
-
-    const token = extractToken(req);
-    if (!token) {
-      return res.status(401).json({ error: 'Unauthorized', message: '请先登录' });
-    }
-
-    const expectedToken = computeToken(authConfig.username, authConfig.password);
-    if (token !== expectedToken) {
-      return res.status(401).json({ error: 'Unauthorized', message: 'Token 无效' });
-    }
-
-    next();
-  };
-}
+export { createAuthMiddleware } from './middleware/authenticate.js';

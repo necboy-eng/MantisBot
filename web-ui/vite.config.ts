@@ -54,6 +54,13 @@ export default defineConfig({
       '/api': {
         target: 'http://localhost:8118',
         changeOrigin: true,
+        cookieDomainRewrite: 'localhost',
+        ...suppressTransientProxyErrors()
+      },
+      '/auth': {
+        target: 'http://localhost:8118',
+        changeOrigin: true,
+        cookieDomainRewrite: 'localhost',
         ...suppressTransientProxyErrors()
       },
       '/health': {

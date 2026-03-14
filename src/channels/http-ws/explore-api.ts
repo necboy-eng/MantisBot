@@ -8,6 +8,60 @@ import { workDirManager } from '../../workdir/manager.js';
 import { getStorageManager, hasStorageManager } from '../../storage/manager.js';
 import { StorageError } from '../../storage/storage.interface.js';
 import { isSensitivePath, shouldHideItem } from '../../security/path-guard.js';
+import { createAuthMiddleware } from './middleware/authenticate.js';
+import { requirePermission } from './middleware/require-permission.js';
+import { resolveAccess, getPathsAclPermission } from '../../auth/path-acl-store.js';
+import type { Request, Response, NextFunction } from 'express';
+
+// ─── 路径 ACL 辅助 ──────────────────────────────────────────────────────────
+
+/**
+ * 获取当前存储的 storageId（NAS 用 storage.id，本地用 'local'）
+ */
+function getStorageId(): string {
+  if (shouldUseStorageManager()) {
+    try {
+      return getStorageManager().getCurrentStorage().config.id ?? 'local';
+    } catch {
+      return 'local';
+    }
+  }
+  return 'local';
+}
+
+/**
+ * 检查当前用户对指定路径是否有所需权限。
+ * auth 未启用时（req.user.roleId === 'role_admin'）直接放行。
+ * 返回 true = 通过，false = 被拒绝（已自动 respond 403）
+ */
+function checkPathAcl(
+  req: Request,
+  res: Response,
+  targetPath: string,
+  requiredPermission: 'read' | 'write',
+): boolean {
+  const user = req.user;
+  if (!user) {
+    res.status(401).json({ error: 'Unauthorized' });
+    return false;
+  }
+  const storageId = getStorageId();
+  const result = resolveAccess({
+    roleId: user.roleId,
+    userId: user.userId,
+    storageId,
+    requestPath: targetPath,
+    requiredPermission,
+  });
+  if (!result.granted) {
+    res.status(403).json({
+      error: 'Forbidden',
+      message: `路径 "${targetPath}" 无${requiredPermission === 'write' ? '写' : '读'}权限`,
+    });
+    return false;
+  }
+  return true;
+}
 
 // 判断是否应走 StorageManager：NAS 类型存储时，即使是绝对路径也走 StorageManager
 function shouldUseStorageManager(): boolean {
@@ -21,6 +75,10 @@ function shouldUseStorageManager(): boolean {
 }
 
 const router = express.Router();
+
+// 所有 explore 路由都需要登录 + useFileManager 权限
+router.use(createAuthMiddleware());
+router.use(requirePermission('useFileManager'));
 
 // 安全检查：防止路径遍历攻击（支持完全访问模式）
 function isPathSafe(_basePath: string, userPath: string): boolean {
@@ -93,6 +151,9 @@ router.get('/api/explore/list', async (req, res) => {
     return res.status(403).json({ error: sensitiveError });
   }
 
+  // 路径 ACL 检查（读权限）
+  if (!checkPathAcl(req, res, targetPath, 'read')) return;
+
   try {
     const useStorageManager = shouldUseStorageManager();
 
@@ -149,7 +210,10 @@ router.get('/api/explore/list', async (req, res) => {
         res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
         res.setHeader('Pragma', 'no-cache');
       }
-      return res.json({ items: result, currentPath: currentDisplayPath });
+      // 标记哪些路径有 ACL 规则，以及具体权限类型
+      const pathsAcl = getPathsAclPermission(result.map(i => i.path), getStorageId());
+      const resultWithAcl = result.map(i => ({ ...i, aclPermission: pathsAcl.get(i.path) ?? null }));
+      return res.json({ items: resultWithAcl, currentPath: currentDisplayPath });
     }
 
     // 回退到原有的本地文件系统操作
@@ -189,7 +253,10 @@ router.get('/api/explore/list', async (req, res) => {
       };
     });
 
-    res.json({ items: result, currentPath: fullPath });
+    // 标记哪些路径有 ACL 规则，以及具体权限类型
+    const pathsAcl = getPathsAclPermission(result.map(i => i.path), getStorageId());
+    const resultWithAcl = result.map(i => ({ ...i, aclPermission: pathsAcl.get(i.path) ?? null }));
+    res.json({ items: resultWithAcl, currentPath: fullPath });
   } catch (error) {
     console.error('Explore list error:', error);
     if (error instanceof StorageError) {
@@ -219,6 +286,9 @@ router.get('/api/explore/read', async (req, res) => {
   if (sensitiveError) {
     return res.status(403).json({ error: sensitiveError });
   }
+
+  // 路径 ACL 检查（读权限）
+  if (!checkPathAcl(req, res, targetPath, 'read')) return;
 
   try {
     const useStorageManager = shouldUseStorageManager();
@@ -310,6 +380,11 @@ router.get('/api/explore/binary', async (req, res) => {
   const sensitiveError = checkSensitivePathAccess(targetPath, baseDir);
   if (sensitiveError) {
     return res.status(403).json({ error: sensitiveError });
+  }
+
+  // 路径 ACL 检查（读权限）—— data/uploads/ 属于附件目录，跳过 ACL
+  if (!targetPath.startsWith('data/uploads/') && !targetPath.startsWith('data\\uploads\\')) {
+    if (!checkPathAcl(req, res, targetPath, 'read')) return;
   }
 
   // 对于 data/uploads/ 路径，直接使用项目目录下的 data 文件夹
@@ -485,6 +560,9 @@ router.get('/api/explore/stat', async (req, res) => {
     return res.status(403).json({ error: sensitiveError });
   }
 
+  // 路径 ACL 检查（读权限）
+  if (!checkPathAcl(req, res, targetPath, 'read')) return;
+
   try {
     // 对于绝对路径，直接使用本地文件系统
     const useStorageManager = shouldUseStorageManager();
@@ -562,6 +640,9 @@ router.post('/api/explore/upload', async (req, res) => {
   if (sensitiveError) {
     return res.status(403).json({ error: sensitiveError });
   }
+
+  // 路径 ACL 检查（写权限）
+  if (!checkPathAcl(req, res, targetDir, 'write')) return;
 
   try {
     // 如果有存储管理器，使用存储管理器
@@ -653,6 +734,9 @@ router.post('/api/explore/upload-multipart', upload.single('file'), async (req, 
     return res.status(403).json({ error: sensitiveError });
   }
 
+  // 路径 ACL 检查（写权限）
+  if (!checkPathAcl(req, res, targetDir, 'write')) return;
+
   // multer 默认以 latin1 读取 Content-Disposition 中的文件名，
   // 而浏览器发送的实际是 UTF-8 编码——需重新解码还原中文等字符
   const filename = Buffer.from(file.originalname, 'latin1').toString('utf8');
@@ -736,6 +820,9 @@ router.post('/api/explore/mkdir', async (req, res) => {
     return res.status(403).json({ error: sensitiveError });
   }
 
+  // 路径 ACL 检查（写权限）
+  if (!checkPathAcl(req, res, targetDir, 'write')) return;
+
   try {
     // 如果有存储管理器，使用存储管理器
     if (shouldUseStorageManager()) {
@@ -815,6 +902,9 @@ router.post('/api/explore/delete', async (req, res) => {
     return res.status(403).json({ error: sensitiveError });
   }
 
+  // 路径 ACL 检查（写权限）
+  if (!checkPathAcl(req, res, targetPath, 'write')) return;
+
   try {
     // 如果有存储管理器，使用存储管理器
     if (shouldUseStorageManager()) {
@@ -889,6 +979,9 @@ router.post('/api/explore/copy', async (req, res) => {
     return res.status(403).json({ error: sensitiveError });
   }
 
+  // 路径 ACL 检查（读权限）
+  if (!checkPathAcl(req, res, source, 'read')) return;
+
   try {
     // NAS 存储时也走 StorageManager 验证文件存在
     if (shouldUseStorageManager()) {
@@ -955,6 +1048,10 @@ router.post('/api/explore/paste', async (req, res) => {
   if (targetError) {
     return res.status(403).json({ error: targetError });
   }
+
+  // 路径 ACL 检查：source 需读权限，targetDir 需写权限
+  if (!checkPathAcl(req, res, source, 'read')) return;
+  if (!checkPathAcl(req, res, targetDir, 'write')) return;
 
   try {
     // 如果有存储管理器，使用存储管理器
@@ -1095,6 +1192,9 @@ router.post('/api/explore/rename', async (req, res) => {
     return res.status(400).json({ error: 'Invalid file name' });
   }
 
+  // 路径 ACL 检查（写权限）
+  if (!checkPathAcl(req, res, targetPath, 'write')) return;
+
   try {
     // 如果有存储管理器，使用存储管理器
     if (shouldUseStorageManager()) {
@@ -1185,6 +1285,11 @@ router.post('/api/explore/download-zip', async (req, res) => {
     if (sensitiveError) {
       return res.status(403).json({ error: sensitiveError });
     }
+  }
+
+  // 路径 ACL 检查（读权限）—— 检查所有路径
+  for (const targetPath of paths) {
+    if (!checkPathAcl(req, res, targetPath, 'read')) return;
   }
 
   try {

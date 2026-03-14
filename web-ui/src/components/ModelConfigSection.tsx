@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react';
-import { Plus, Trash2, Star, Edit2 } from 'lucide-react';
+import { Plus, Trash2, Star, Edit2, Lock } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { ModelFormModal, MODEL_PROVIDERS } from './ModelFormModal';
 import { authFetch } from '../utils/auth';
 import { cachedFetch, invalidateCache } from '../utils/configCache';
+import { usePermission } from '../hooks/usePermission';
 
 interface Model {
   name: string;
@@ -36,6 +37,7 @@ function getProtocolDisplayName(model: Model): string {
 
 export function ModelConfigSection() {
   const { t } = useTranslation();
+  const canEdit = usePermission('editModelConfig');
   const [models, setModels] = useState<Model[]>([]);
   const [defaultModel, setDefaultModel] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -140,14 +142,23 @@ export function ModelConfigSection() {
         <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">
           模型列表
         </h3>
-        <button
-          onClick={openAddModal}
-          className="flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors"
-        >
-          <Plus className="w-4 h-4" />
-          添加模型
-        </button>
+        {canEdit && (
+          <button
+            onClick={openAddModal}
+            className="flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors"
+          >
+            <Plus className="w-4 h-4" />
+            添加模型
+          </button>
+        )}
       </div>
+
+      {!canEdit && (
+        <div className="mb-4 flex items-center gap-2 px-3 py-2 rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 text-sm text-amber-700 dark:text-amber-400">
+          <Lock className="w-4 h-4 flex-shrink-0" />
+          <span>当前账号没有编辑模型配置的权限，仅可查看。</span>
+        </div>
+      )}
 
       {error && (
         <div className="mb-4 p-3 bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300 rounded-lg">
@@ -206,46 +217,50 @@ export function ModelConfigSection() {
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
-                  {/* Toggle Switch */}
-                  <button
-                    onClick={() => toggleModel(model.name)}
-                    disabled={loading}
-                    className={`w-10 h-5 rounded-full relative transition-colors ${
-                      !isDisabled
-                        ? 'bg-primary-600'
-                        : 'bg-gray-300 dark:bg-gray-700'
-                    } ${loading ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
-                    title={isDisabled ? '点击启用' : '点击禁用'}
-                  >
-                    <div
-                      className={`w-4 h-4 bg-white rounded-full absolute top-0.5 transition-all ${
-                        !isDisabled ? 'right-0.5' : 'left-0.5'
-                      }`}
-                    />
-                  </button>
-                  {defaultModel !== model.name && (
-                    <button
-                      onClick={() => setDefault(model.name)}
-                      className="p-2 text-gray-500 hover:text-primary-600 dark:text-gray-400 dark:hover:text-primary-400 transition-colors"
-                      title="设为默认"
-                    >
-                      <Star className="w-4 h-4" />
-                    </button>
+                  {canEdit && (
+                    <>
+                      {/* Toggle Switch */}
+                      <button
+                        onClick={() => toggleModel(model.name)}
+                        disabled={loading}
+                        className={`w-10 h-5 rounded-full relative transition-colors ${
+                          !isDisabled
+                            ? 'bg-primary-600'
+                            : 'bg-gray-300 dark:bg-gray-700'
+                        } ${loading ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+                        title={isDisabled ? '点击启用' : '点击禁用'}
+                      >
+                        <div
+                          className={`w-4 h-4 bg-white rounded-full absolute top-0.5 transition-all ${
+                            !isDisabled ? 'right-0.5' : 'left-0.5'
+                          }`}
+                        />
+                      </button>
+                      {defaultModel !== model.name && (
+                        <button
+                          onClick={() => setDefault(model.name)}
+                          className="p-2 text-gray-500 hover:text-primary-600 dark:text-gray-400 dark:hover:text-primary-400 transition-colors"
+                          title="设为默认"
+                        >
+                          <Star className="w-4 h-4" />
+                        </button>
+                      )}
+                      <button
+                        onClick={() => openEditModal(model)}
+                        className="p-2 text-gray-500 hover:text-blue-600 dark:text-gray-400 dark:hover:text-blue-400 transition-colors"
+                        title="编辑模型"
+                      >
+                        <Edit2 className="w-4 h-4" />
+                      </button>
+                      <button
+                        onClick={() => deleteModel(model.name)}
+                        className="p-2 text-gray-500 hover:text-red-600 dark:text-gray-400 dark:hover:text-red-400 transition-colors"
+                        title="删除模型"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </>
                   )}
-                  <button
-                    onClick={() => openEditModal(model)}
-                    className="p-2 text-gray-500 hover:text-blue-600 dark:text-gray-400 dark:hover:text-blue-400 transition-colors"
-                    title="编辑模型"
-                  >
-                    <Edit2 className="w-4 h-4" />
-                  </button>
-                  <button
-                    onClick={() => deleteModel(model.name)}
-                    className="p-2 text-gray-500 hover:text-red-600 dark:text-gray-400 dark:hover:text-red-400 transition-colors"
-                    title="删除模型"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
                 </div>
               </div>
             );

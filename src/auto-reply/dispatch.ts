@@ -17,6 +17,7 @@ import { UnifiedAgentRunner } from '../agents/unified-runner.js';
 import { getFileStorage } from '../files/index.js';
 import { workDirManager } from '../workdir/manager.js';
 import { registerPendingImages, VISION_INJECT_ENV_KEY, type ImageBlock } from '../agents/openai-proxy.js';
+import { getUserById } from '../auth/users-store.js';
 
 // 图片最大允许大小（2MB）
 const MAX_IMAGE_SIZE = 2 * 1024 * 1024;
@@ -291,8 +292,19 @@ ${content}
       // 设置用户上下文（用于工具执行时获取用户身份，如飞书的 senderOpenId）
       const runner = this.agentRunner as any;
       if (typeof runner.setUserContext === 'function') {
-        runner.setUserContext({ userId, platform: message.platform });
-        console.log(`[DispatchStream] User context set: userId=${userId}, platform=${message.platform}`);
+        // http-ws 渠道��� roleId 已由 http-server.ts 在 streamRun 前注入，此处跳过
+        // 飞书/钉钉等渠道：userId 是平台 openId，尝试通过 DB 查询 roleId
+        let roleId = 'role_member';
+        if (userId && message.platform !== 'http-ws') {
+          try {
+            const dbUser = getUserById(userId);
+            if (dbUser?.roleId) roleId = dbUser.roleId;
+          } catch {
+            // 查询失败时降级为 role_member
+          }
+        }
+        runner.setUserContext({ userId, roleId, platform: message.platform });
+        console.log(`[DispatchStream] User context set: userId=${userId}, roleId=${roleId}, platform=${message.platform}`);
       }
 
       // Search relevant memories

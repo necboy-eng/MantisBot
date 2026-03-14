@@ -56,6 +56,13 @@ export interface Session {
   approvalMode?: ApprovalMode;
   // 星标置顶：标记为重要会话，在侧边栏顶部分组显示
   starred?: boolean;
+  /**
+   * 会话归属者 ID。
+   * - Web UI 会话：填写 JWT 中的 userId（如 "usr_xxx"）
+   * - 外部渠道（飞书、钉钉等）：不填，为 undefined，按 chatId 天然隔离
+   * - auth 未开启：不填，所有用户共享（兼容旧行为）
+   */
+  ownerId?: string;
 }
 
 // LLM types
@@ -104,8 +111,20 @@ export interface ToolInfo {
   };
 }
 
+/**
+ * 工具执行时的用户身份上下文（用于 Path ACL 权限检查）
+ */
+export interface ToolUserContext {
+  /** 系统 DB 用户 ID（user_Xxxxx）*/
+  userId: string;
+  /** 角色 ID（role_admin / role_member 等）*/
+  roleId: string;
+  /** 允许额外的上下文属性（兼容飞书等插件工具） */
+  [key: string]: unknown;
+}
+
 export interface Tool extends ToolInfo {
-  execute: (params: Record<string, unknown>, context?: Record<string, unknown>) => Promise<unknown>;
+  execute: (params: Record<string, unknown>, context?: ToolUserContext) => Promise<unknown>;
 }
 
 export interface ToolResult {
