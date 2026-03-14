@@ -22,7 +22,7 @@ import { requirePermission } from './middleware/require-permission.js';
 import { authRouter } from './routes/auth-routes.js';
 import { usersRouter } from './routes/users-routes.js';
 import { pathAclRouter } from './routes/path-acl-routes.js';
-import { initSystemDb } from '../../auth/db.js';
+import { initSystemDb, getSystemDb } from '../../auth/db.js';
 import { initBuiltinRoles } from '../../auth/roles-store.js';
 import { validateJwtSecret, verifyAccessToken } from '../../auth/jwt.js';
 // auth-middleware.ts 兼容层（保留 computeToken/hashPassword/verifyPassword 供现有代码使用）
@@ -253,7 +253,6 @@ export async function createHTTPServer(options: HTTPServerOptions) {
 
     // 检查是否需要初始化（系统中没有任何用户）
     try {
-      const { getSystemDb } = require('../../auth/db.js');
       const db = getSystemDb();
       const userCount = (db.prepare('SELECT COUNT(*) as count FROM users').get() as any)?.count ?? 0;
       if (userCount === 0) {
@@ -342,6 +341,18 @@ export async function createHTTPServer(options: HTTPServerOptions) {
       if (userCount > 0) {
         return res.status(403).json({ error: 'already_initialized', message: '系统已初始化，请直接登录' });
       }
+
+      // 时间窗口保护：仅在系统启动后 10 分钟内允许初始化
+      const uptimeSeconds = process.uptime();
+      const setupWindowSeconds = 10 * 60; // 10 分钟
+      if (uptimeSeconds > setupWindowSeconds) {
+        const uptimeMinutes = Math.floor(uptimeSeconds / 60);
+        return res.status(403).json({
+          error: 'setup_window_expired',
+          message: `初始化窗口已关闭（系统已运行 ${uptimeMinutes} 分钟）。请使用管理员账号登录或重启服务。`
+        });
+      }
+
       const { username, password } = req.body ?? {};
       if (!username || !password || password.length < 8) {
         return res.status(400).json({ error: 'invalid_input', message: '用户名和密码（至少8位）不能为空' });
