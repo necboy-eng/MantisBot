@@ -1,0 +1,32 @@
+node_modules
+dist
+web-ui/dist
+web-ui/node_modules
+.git
+.github
+.worktrees
+.claude
+.firecrawl
+.crawl4ai-tmp
+.playwright-mcp
+.learnings
+data/*
+!data/agent-profiles
+config/config.json
+*.log
+*.map
+Dockerfile
+docker-compose*.yml
+.env
+.npmrc
+*.md
+LICENSE
+Makefile
+install.*
+start-*.*
+start.*
+docs
+assets
+# 排除 skills 源码，因为我们会用 COPY . . 复制。
+# 但是为了加速，我们可以只复制必要的。
+# 其实 COPY . . 已经足够，但如果不排除 node_modules，它会非常慢。

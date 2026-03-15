@@ -451,11 +451,23 @@ export class PluginLoader {
       // 导入并调用注册函数
       try {
         console.log(`[Plugins] Registering tools for ${plugin.name}...`);
-        const module = await import(`../../${toolsPath}`);
+
+        // 自动修正路径：如果是生产环境 (从 dist 运行)，将 src/*.ts 转换为 dist/*.js
+        let effectiveToolsPath = toolsPath;
+        const isDist = import.meta.url.includes('/dist/');
+
+        if (isDist && effectiveToolsPath.startsWith('src/')) {
+          effectiveToolsPath = effectiveToolsPath
+            .replace(/^src\//, 'dist/')
+            .replace(/\.ts$/, '.js');
+          console.log(`[Plugins] Redirecting ${plugin.name} tools path to: ${effectiveToolsPath}`);
+        }
+
+        const module = await import(`../../${effectiveToolsPath}`);
         if (module.register && typeof module.register === 'function') {
           await module.register(registry, context);
         } else {
-          console.warn(`[Plugins] No register function found in ${toolsPath}`);
+          console.warn(`[Plugins] No register function found in ${effectiveToolsPath}`);
         }
       } catch (error) {
         console.error(`[Plugins] Failed to register tools for ${plugin.name}:`, error);

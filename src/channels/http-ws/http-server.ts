@@ -301,10 +301,11 @@ export async function createHTTPServer(options: HTTPServerOptions) {
       });
 
       // 设置 RT Cookie（path=/auth，与 auth-routes 一致）
+      // 使用 COOKIE_SECURE 环境变量而非 NODE_ENV，避免 HTTP Docker 部署时 Secure Cookie 被浏览器拒绝发送
       res.cookie('rt', result.refreshToken, {
         httpOnly: true,
         sameSite: 'lax',
-        secure: process.env.NODE_ENV === 'production',
+        secure: process.env.COOKIE_SECURE === 'true',
         maxAge: 7 * 24 * 60 * 60 * 1000,
         path: '/auth',
       });
@@ -364,7 +365,7 @@ export async function createHTTPServer(options: HTTPServerOptions) {
       const result = await login({ username, password, ipAddress: req.ip, userAgent: req.headers['user-agent'] });
       res.cookie('rt', result.refreshToken, {
         httpOnly: true, sameSite: 'lax',
-        secure: process.env.NODE_ENV === 'production',
+        secure: process.env.COOKIE_SECURE === 'true',
         maxAge: 7 * 24 * 60 * 60 * 1000, path: '/auth',
       });
       return res.json({ ok: true, token: result.accessToken, accessToken: result.accessToken, authEnabled: true, authenticated: true });

@@ -7,11 +7,15 @@ export const authRouter = Router();
 const RT_COOKIE = 'rt';
 const RT_MAX_AGE = 7 * 24 * 60 * 60 * 1000; // 7 天（毫秒）
 
+// COOKIE_SECURE=true 时才启用 Secure 标志。
+// 不直接绑定 NODE_ENV=production，因为 Docker HTTP 部署时同样是 production 但无 HTTPS。
+const COOKIE_SECURE = process.env.COOKIE_SECURE === 'true';
+
 function setRtCookie(res: import('express').Response, rawToken: string) {
   res.cookie(RT_COOKIE, rawToken, {
     httpOnly: true,
     sameSite: 'lax',
-    secure: process.env.NODE_ENV === 'production',
+    secure: COOKIE_SECURE,
     maxAge: RT_MAX_AGE,
     path: '/auth',
   });

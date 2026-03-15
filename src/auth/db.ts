@@ -2,7 +2,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { existsSync, mkdirSync } from 'fs';
+import { existsSync, mkdirSync, writeFileSync, unlinkSync } from 'fs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_DATA_DIR = join(__dirname, '../../data');
@@ -19,13 +19,32 @@ class SystemDbImpl implements SystemDb {
 
   constructor(dbPath: string) {
     const dataDir = dirname(dbPath);
-    if (!existsSync(dataDir)) {
-      mkdirSync(dataDir, { recursive: true });
-    }
+    try {
+      if (!existsSync(dataDir)) {
+        mkdirSync(dataDir, { recursive: true });
+      }
 
-    this.db = new DatabaseSync(dbPath);
-    this.initializeSchema();
-    console.log('[SystemDb] Database initialized:', dbPath);
+      // 预检目录写权限
+      const testFile = join(dataDir, `.write_test_${Date.now()}`);
+      try {
+        writeFileSync(testFile, 'test');
+        unlinkSync(testFile);
+      } catch (e: any) {
+        console.error(`[SystemDb] CRITICAL: Directory "${dataDir}" is NOT writable! Error: ${e.message}`);
+        console.error(`[SystemDb] Current process UID: ${process.getuid?.()}, GID: ${process.getgid?.()}`);
+        console.error(`[SystemDb] Please ensure host directory permissions are correct (e.g., sudo chown -R 1000:1000 ./data)`);
+      }
+
+      this.db = new DatabaseSync(dbPath);
+      this.initializeSchema();
+      console.log('[SystemDb] Database initialized:', dbPath);
+    } catch (error: any) {
+      console.error(`[SystemDb] Failed to initialize database at ${dbPath}:`, error.message);
+      if (error.code === 'ERR_SQLITE_ERROR' || error.message.includes('unable to open database file')) {
+        console.error(`[SystemDb] This is likely a permission issue. UID: ${process.getuid?.()}, path: ${dbPath}`);
+      }
+      throw error;
+    }
   }
 
   private initializeSchema(): void {

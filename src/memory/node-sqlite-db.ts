@@ -4,7 +4,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { existsSync, mkdirSync } from 'fs';
+import { existsSync, mkdirSync, writeFileSync, unlinkSync } from 'fs';
 import { createRequire } from 'module';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -37,22 +37,41 @@ export class NodeSqliteDatabase {
 
     // 确保数据库目录存在
     const dataDir = dirname(dbPath);
-    if (!existsSync(dataDir)) {
-      mkdirSync(dataDir, { recursive: true });
+    try {
+      if (!existsSync(dataDir)) {
+        mkdirSync(dataDir, { recursive: true });
+      }
+
+      // 预检目录写权限
+      const testFile = join(dataDir, `.write_test_vec_${Date.now()}`);
+      try {
+        writeFileSync(testFile, 'test');
+        unlinkSync(testFile);
+      } catch (e: any) {
+        console.error(`[NodeSqlite] CRITICAL: Directory "${dataDir}" is NOT writable! Error: ${e.message}`);
+        console.error(`[NodeSqlite] Current process UID: ${process.getuid?.()}, GID: ${process.getgid?.()}`);
+        console.error(`[NodeSqlite] Please ensure host directory permissions are correct (e.g., sudo chown -R 1000:1000 ./data)`);
+      }
+
+      // 创建数据库连接，启用扩展加载
+      this.db = new DatabaseSync(dbPath, {
+        allowExtension: true
+      });
+
+      console.log('[NodeSqlite] Database opened:', dbPath);
+
+      // 同步加载向量扩展（不使用 async）
+      this.loadVectorExtensionSync();
+
+      // 初始化数据库模式
+      this.initializeSchema();
+    } catch (error: any) {
+      console.error(`[NodeSqlite] Failed to initialize database at ${dbPath}:`, error.message);
+      if (error.code === 'ERR_SQLITE_ERROR' || error.message.includes('unable to open database file')) {
+        console.error(`[NodeSqlite] This is likely a permission issue. UID: ${process.getuid?.()}, path: ${dbPath}`);
+      }
+      throw error;
     }
-
-    // 创建数据库连接，启用扩展加载
-    this.db = new DatabaseSync(dbPath, {
-      allowExtension: true
-    });
-
-    console.log('[NodeSqlite] Database opened:', dbPath);
-
-    // 同步加载向量扩展（不使用 async）
-    this.loadVectorExtensionSync();
-
-    // 初始化数据库模式
-    this.initializeSchema();
   }
 
   /**

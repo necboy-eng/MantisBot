@@ -1,14 +1,19 @@
-FROM node:20-alpine AS builder
+FROM node:22-alpine AS builder
 
 WORKDIR /app
 
+# 配置 npm 国内镜像
+RUN npm config set registry https://registry.npmmirror.com
+
 COPY package*.json ./
-RUN npm ci
+
+# 使用 npm 缓存挂载
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci
 
 COPY . .
 
-# 接收从 Makefile buildx-webui 传入的 VERSION build-arg，
-# 设置为环境变量供 vite.config.ts 读取，避免依赖上级目录的 package.json
+# 接收从 Makefile buildx-webui 传入的 VERSION build-arg
 ARG VERSION=0.0.0
 ENV VERSION=${VERSION}
 

@@ -3,8 +3,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      platforms:
-        - linux/arm64/v8
     ports:
       - "8118:8118"
     volumes:
@@ -14,14 +12,25 @@ services:
       - ./skills:/app/skills:rw
       # Python 虚拟环境（持久化用户安装的包）
       - python-venv:/app/python-venv
-      # 用户主目录（用于访问宿主机文件）
-      - ~/:/root:rw
-      # Docker socket（用于 DDNSTO 等需要在容器内运行 Docker 的功能）
+      # 宿主机主目录挂载：
+      #   /app/host-home  - WorkDirManager 期望路径（只读，Agent 读取宿主机文件用）
+      #   /home/node      - node 用户家目录（只读，兼容其他依赖此路径的代码）
+      # 注意：两个路径均为只读，防止宿主机属主为 root 时 node 用户写入失败
+      - ~/:/app/host-home:ro
+      - ~/:/home/node:ro
+      # Claude Agent SDK 数据目录（持久化 .claude 写入，node 用户有写权限）
+      # CLAUDE_CONFIG_DIR 环境变量将 SDK 所有写入重定向至此
+      # 使用 bind mount（./data 已有 rw 权限），宿主机可直接查看内容
+      - ./data/claude-sdk:/app/data/claude-sdk:rw
+      # Docker socket（注意：非 root 用户可能需要额外权限才能访问此文件）
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - NODE_ENV=production
       - CONFIG_PATH=/app/config/config.json
       - FIRECRAWL_API_KEY=${FIRECRAWL_API_KEY}
+      # 将 Claude Agent SDK 写入路径重定向到有权限的目录
+      # SDK 逻辑：process.env.CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), ".claude")
+      - CLAUDE_CONFIG_DIR=/app/data/claude-sdk
     restart: unless-stopped
 
   web-ui:

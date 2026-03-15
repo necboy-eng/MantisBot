@@ -44,6 +44,9 @@ const ALLOWED_ENV_KEYS = [
   'TEMP',
   'TMP',
   'TMPDIR',
+  // Claude Agent SDK 配置目录（重定向 .claude 写入路径，防止写入只读挂载导致权限错误）
+  // SDK 逻辑：process.env.CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), ".claude")
+  'CLAUDE_CONFIG_DIR',
 
   // Node.js 相关
   'NODE_ENV',

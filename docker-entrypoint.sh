@@ -2,7 +2,6 @@
 set -e
 
 # 初始化 skills 目录：卷首次挂载时为空，从内置备份复制
-# 已有内容（用户自建 skill）则跳过，不覆盖
 if [ -z "$(ls -A /app/skills 2>/dev/null)" ]; then
   echo "[Entrypoint] Initializing skills from built-in defaults..."
   cp -r /app/skills-default/. /app/skills/
@@ -18,72 +17,20 @@ if [ ! -d "/app/data/agent-profiles" ] || [ -z "$(ls -A /app/data/agent-profiles
 fi
 
 # 确保 Python 虚拟环境存在且可用
+# 注意：在 Dockerfile 中安装的包是安装在系统环境下的 (--break-system-packages)
+# 这里保留 venv 逻辑是为了让用户可以后续通过终端自行安装其它包而不污染系统环境
 if [ ! -f "/app/python-venv/bin/activate" ]; then
   echo "[Entrypoint] Creating Python virtual environment..."
-  python3 -m venv /app/python-venv
+  python3 -m venv /app/python-venv --system-site-packages
 fi
 
-# 激活虚拟环境（使用 . 代替 source，兼容 sh）
+# 激活虚拟环境
 . /app/python-venv/bin/activate
 
-# crawl4ai 使用独立的浏览器路径，与 Node.js playwright (/app/.playwright) 隔离
+# 导出浏览器路径
 export PLAYWRIGHT_BROWSERS_PATH=/app/.playwright-python
 
-# 检查基础包是否已安装，如果没有则安装
-if ! python3 -c "import requests" 2>/dev/null; then
-  echo "[Entrypoint] Installing Python packages for skills..."
-  # 写入初始化标记文件，Node.js 启动后读取此文件以决定 /health 的返回状态
-  mkdir -p /app/data
-  echo "installing_python_packages" > /app/data/.init-status
-
-  # crawl4ai（网页爬取）
-  pip install --no-cache-dir \
-    crawl4ai
-
-  # 核心包
-  pip install --no-cache-dir \
-    requests \
-    httpx \
-    aiohttp \
-    beautifulsoup4 \
-    lxml \
-    defusedxml \
-    pyyaml
-
-  # 数据处理
-  pip install --no-cache-dir \
-    pandas \
-    numpy
-
-  # PDF 处理
-  pip install --no-cache-dir \
-    pypdf \
-    pdfplumber \
-    pdf2image
-
-  # 图像处理
-  pip install --no-cache-dir \
-    Pillow
-
-  # Office 文件处理
-  pip install --no-cache-dir \
-    openpyxl \
-    python-docx \
-    python-pptx
-
-  # 股票数据
-  pip install --no-cache-dir \
-    yfinance
-
-  # MCP 和 Claude API
-  pip install --no-cache-dir \
-    anthropic \
-    mcp
-
-  echo "[Entrypoint] Python packages installed successfully!"
-  # 删除初始化标记文件，通知 Node.js 初始化已完成
-  rm -f /app/data/.init-status
-fi
+echo "[Entrypoint] Environment ready, starting MantisBot..."
 
 # 启动应用
 exec node dist/entry.js
