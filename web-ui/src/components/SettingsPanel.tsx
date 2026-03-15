@@ -9,13 +9,13 @@ import { PathAclSection } from './PathAclSection';
 import { ChannelManagementSection } from './ChannelManagementSection';
 import { EmailConfigSection } from './EmailConfigSection';
 import { AuthSettingsSection } from './AuthSettingsSection';
-import { FirecrawlSettingsSection } from './FirecrawlSettingsSection';
 import { AgentTeamsSection } from './AgentTeamsSection';
 import { PluginManagementSection } from './PluginManagementSection';
 import { StorageManagementSection } from './StorageManagementSection';
 import { UserManagementSection } from './UserManagementSection';
 import { RoleManagementSection } from './RoleManagementSection';
 import { InstallSkillModal } from './InstallSkillModal';
+import { GeneralSettingsSection } from './GeneralSettingsSection';
 import { authFetch } from '../utils/auth';
 import { invalidateAllCache } from '../utils/configCache';
 
@@ -39,7 +39,7 @@ export function SettingsPanel({ isOpen, onClose }: SettingsPanelProps) {
   const [loading, setLoading] = useState(false);
   const [reloading, setReloading] = useState(false);
   const [downloadingSkills, setDownloadingSkills] = useState<Set<string>>(new Set());
-  const [activeTab, setActiveTab] = useState<'skills' | 'models' | 'profiles' | 'evolutions' | 'paths' | 'channels' | 'email' | 'auth' | 'users' | 'firecrawl' | 'teams' | 'plugins' | 'storage'>('models');
+  const [activeTab, setActiveTab] = useState<'skills' | 'models' | 'profiles' | 'evolutions' | 'paths' | 'channels' | 'email' | 'auth' | 'users' | 'teams' | 'plugins' | 'storage' | 'general'>('models');
   const [activeProfile, setActiveProfile] = useState('default');
   const [installModalOpen, setInstallModalOpen] = useState(false);
   const [reloadingConfig, setReloadingConfig] = useState(false);
@@ -305,16 +305,6 @@ export function SettingsPanel({ isOpen, onClose }: SettingsPanelProps) {
               用户权限
             </button>
             <button
-              onClick={() => setActiveTab('firecrawl')}
-              className={`pb-3 text-sm font-medium border-b-2 transition-colors ${
-                activeTab === 'firecrawl'
-                  ? 'text-primary-600 border-primary-600'
-                  : 'text-gray-500 border-transparent hover:text-gray-700'
-              }`}
-            >
-              Firecrawl
-            </button>
-            <button
               onClick={() => setActiveTab('teams')}
               className={`pb-3 text-sm font-medium border-b-2 transition-colors ${
                 activeTab === 'teams'
@@ -343,6 +333,16 @@ export function SettingsPanel({ isOpen, onClose }: SettingsPanelProps) {
               }`}
             >
               {t('settings.storage') || '存储'}
+            </button>
+            <button
+              onClick={() => setActiveTab('general')}
+              className={`pb-3 text-sm font-medium border-b-2 transition-colors ${
+                activeTab === 'general'
+                  ? 'text-primary-600 border-primary-600'
+                  : 'text-gray-500 border-transparent hover:text-gray-700'
+              }`}
+            >
+              通用
             </button>
           </div>
         </div>
@@ -387,14 +387,14 @@ export function SettingsPanel({ isOpen, onClose }: SettingsPanelProps) {
             <UserManagementSection />
             <RoleManagementSection />
           </div>
-        ) : activeTab === 'firecrawl' ? (
-          <FirecrawlSettingsSection key={refreshKey} />
         ) : activeTab === 'teams' ? (
           <AgentTeamsSection key={refreshKey} />
         ) : activeTab === 'plugins' ? (
           <PluginManagementSection key={refreshKey} />
         ) : activeTab === 'storage' ? (
           <StorageManagementSection key={refreshKey} />
+        ) : activeTab === 'general' ? (
+          <GeneralSettingsSection key={refreshKey} />
         ) : (
           <EvolutionSection key={refreshKey} />
         )}

@@ -1398,7 +1398,34 @@ export async function createHTTPServer(options: HTTPServerOptions) {
     }
   });
 
-  // Reload config from disk
+  // Office Preview Server routes
+  app.get('/api/config/office-preview', (_, res) => {
+    try {
+      const config = getConfig();
+      res.json({ url: config.officePreviewServer || 'https://officepreview.dsai.vip' });
+    } catch (error) {
+      console.error('[HTTPServer] Office preview config error:', error);
+      res.status(500).json({ error: 'Failed to get office preview config' });
+    }
+  });
+
+  app.put('/api/config/office-preview', requirePermission('editServerConfig'), async (req, res) => {
+    try {
+      const { url } = req.body;
+      if (typeof url !== 'string' || !url.trim()) {
+        return res.status(400).json({ error: 'url must be a non-empty string' });
+      }
+      const config = getConfig();
+      config.officePreviewServer = url.trim();
+      await saveConfig(config);
+      res.json({ success: true, url: config.officePreviewServer });
+    } catch (error) {
+      console.error('[HTTPServer] Office preview config update error:', error);
+      res.status(500).json({ error: 'Failed to update office preview config' });
+    }
+  });
+
+  // Firecrawl API Key routes
   app.post('/api/config/reload', requirePermission('editServerConfig'), async (_, res) => {
     try {
       config = loadConfig(); // 同时更新局部闭包变量，确保所有路由读到最新配置
@@ -2593,6 +2620,58 @@ export async function createHTTPServer(options: HTTPServerOptions) {
     }
   });
 
+  // Office 预览服务器代理（必须在 exploreRouter 之前注册，
+  // 否则 exploreRouter 的全局认证中间件会拦截 /office-preview/* 请求）
+  app.use('/office-preview', async (req, res) => {
+    try {
+      const config = getConfig();
+      const previewServer = config.officePreviewServer;
+
+      if (!previewServer) {
+        return res.status(503).json({ error: 'Office preview server not configured' });
+      }
+
+      // 构建目标 URL（移除 /office-preview 前缀）
+      const pathWithoutPrefix = req.originalUrl.replace(/^\/office-preview/, '') || '/';
+      const targetUrl = `${previewServer}${pathWithoutPrefix}`;
+
+      console.log('[HTTPServer] Office preview proxy:', req.originalUrl, '->', targetUrl);
+
+      // 转发请求到 Office 预览服务器
+      const response = await fetch(targetUrl, {
+        method: req.method,
+        headers: {
+          ...req.headers as Record<string, string>,
+          host: new URL(previewServer).host
+        }
+      });
+
+      // 转发响应头（移除可能导致冲突的头）
+      response.headers.forEach((value, key) => {
+        const keyLower = key.toLowerCase();
+        // 跳过 Transfer-Encoding，因为我们会用 Content-Length
+        // 跳过 Content-Encoding，因为 fetch 已经自动解压了
+        // 跳过 Content-Length，我们会重新设置
+        if (keyLower === 'transfer-encoding' ||
+            keyLower === 'content-encoding' ||
+            keyLower === 'content-length') {
+          return;
+        }
+        res.setHeader(key, value);
+      });
+
+      // 转发状态码和响应体
+      res.status(response.status);
+      const buffer = await response.arrayBuffer();
+      // 设置正确的 Content-Length（基于解压后的内容）
+      res.setHeader('Content-Length', buffer.byteLength);
+      res.send(Buffer.from(buffer));
+    } catch (error) {
+      console.error('[HTTPServer] Office preview proxy error:', error);
+      res.status(500).json({ error: 'Failed to proxy to office preview server' });
+    }
+  });
+
   // File explore routes
   app.use(exploreRouter);
 
@@ -2715,57 +2794,6 @@ export async function createHTTPServer(options: HTTPServerOptions) {
     } catch (error) {
       console.error('[HTTPServer] File download error:', error);
       res.status(500).json({ error: 'Failed to download file' });
-    }
-  });
-
-  // Office 预览服务器代理（处理所有 /office-preview/* 请求）
-  app.use('/office-preview', async (req, res) => {
-    try {
-      const config = getConfig();
-      const previewServer = config.officePreviewServer;
-
-      if (!previewServer) {
-        return res.status(503).json({ error: 'Office preview server not configured' });
-      }
-
-      // 构建目标 URL（移除 /office-preview 前缀）
-      const pathWithoutPrefix = req.originalUrl.replace(/^\/office-preview/, '') || '/';
-      const targetUrl = `${previewServer}${pathWithoutPrefix}`;
-
-      console.log('[HTTPServer] Office preview proxy:', req.originalUrl, '->', targetUrl);
-
-      // 转发请求到 Office 预览服务器
-      const response = await fetch(targetUrl, {
-        method: req.method,
-        headers: {
-          ...req.headers as Record<string, string>,
-          host: new URL(previewServer).host
-        }
-      });
-
-      // 转发响应头（移除可能导致冲突的头）
-      response.headers.forEach((value, key) => {
-        const keyLower = key.toLowerCase();
-        // 跳过 Transfer-Encoding，因为我们会用 Content-Length
-        // 跳过 Content-Encoding，因为 fetch 已经自动解压了
-        // 跳过 Content-Length，我们会重新设置
-        if (keyLower === 'transfer-encoding' ||
-            keyLower === 'content-encoding' ||
-            keyLower === 'content-length') {
-          return;
-        }
-        res.setHeader(key, value);
-      });
-
-      // 转发状态码和响应体
-      res.status(response.status);
-      const buffer = await response.arrayBuffer();
-      // 设置正确的 Content-Length（基于解压后的内容）
-      res.setHeader('Content-Length', buffer.byteLength);
-      res.send(Buffer.from(buffer));
-    } catch (error) {
-      console.error('[HTTPServer] Office preview proxy error:', error);
-      res.status(500).json({ error: 'Failed to proxy to office preview server' });
     }
   });
 

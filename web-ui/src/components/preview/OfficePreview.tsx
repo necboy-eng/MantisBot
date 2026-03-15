@@ -31,14 +31,8 @@ export function OfficePreview({ filePath, type, fileApiUrl, officePreviewServer 
   // 计算 OnlyOffice 预览 URL
   const onlyOfficePreviewUrl = useMemo(() => {
     if (!officePreviewServer) return null;
-
-    const isDev = window.location.port === '3081';
-    if (isDev) {
-      // 开发模式：直接访问 OnlyOffice 服务器
-      return `${officePreviewServer}/#/?url=${encodeURIComponent(fileUrl)}`;
-    }
-    // 生产模式：通过 nginx 代理
-    return `/office-preview/#/?url=${encodeURIComponent(fileUrl)}`;
+    // 配置了 officePreviewServer 时直连，无需经过 /office-preview 代理
+    return `${officePreviewServer}/#/?url=${encodeURIComponent(fileUrl)}`;
   }, [officePreviewServer, fileUrl]);
 
   useEffect(() => {

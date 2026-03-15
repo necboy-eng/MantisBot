@@ -88,6 +88,7 @@ export function getDefaultConfig(): Config {
     ],
     workspace: './data',
     allowedPaths: [],
+    officePreviewServer: 'https://officepreview.dsai.vip',
     enabledSkills: [
       'pptx',
       'xlsx',

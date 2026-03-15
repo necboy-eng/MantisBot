@@ -53,7 +53,7 @@
   ],
   "workspace": "./data",
   "allowedPaths": [],
-  "officePreviewServer": "http://localhost:8083",
+  "officePreviewServer": "https://officepreview.dsai.vip",
   "enabledSkills": [
     "pptx",
     "xlsx",

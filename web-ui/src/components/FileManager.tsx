@@ -315,13 +315,8 @@ export function FileManager({
         // 构建文件 URL
         const fileUrl = appendTokenToUrl(`${serverUrl}/api/explore/binary?path=${item.path}`);
 
-        // 预览服务器 URL
-        // 开发环境：直接访问预览服务器（避免路径问题）
-        // 生产环境：通过后端代理访问
-        const isDev = window.location.port === '3000';
-        const previewUrl = isDev
-          ? `${officePreviewServer}/#/?url=${encodeURIComponent(fileUrl)}`
-          : `/office-preview/#/?url=${encodeURIComponent(fileUrl)}`;
+        // 配置了 officePreviewServer 时直连，无需经过 /office-preview 代理
+        const previewUrl = `${officePreviewServer}/#/?url=${encodeURIComponent(fileUrl)}`;
 
         window.open(previewUrl, '_blank');
       } else {

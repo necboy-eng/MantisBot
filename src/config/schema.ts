@@ -599,7 +599,7 @@ export const ConfigSchema = z.object({
   // 允许 Agent 访问的宿主机目录列表（需要手动在 docker-compose.yml 中挂载）
   allowedPaths: z.array(z.string()).optional().default([]),
   // Office 文件预览服务器配置
-  officePreviewServer: z.string().optional(),
+  officePreviewServer: z.string().default('https://officepreview.dsai.vip'),
   // 默认禁用所有 skills，只有在这里列出的才会启用
   enabledSkills: z.array(z.string()).optional().default([]),
   // 已废弃：使用 enabledSkills 代替
