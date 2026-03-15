@@ -13,7 +13,7 @@ import { v4 as uuidv4 } from 'uuid';
 import type { SessionManager } from '../../session/manager.js';
 import type { ToolRegistry } from '../../agents/tools/registry.js';
 import { getConfig, loadConfig, saveConfig } from '../../config/loader.js';
-import type { Config, ModelConfig, EmailAccount, EmailConfig, AgentTeam } from '../../config/schema.js';
+import type { Config, ModelConfig, EmailAccount, AgentTeam } from '../../config/schema.js';
 import { AgentTeamSchema, modelSupportsVision } from '../../config/schema.js';
 import { PRESET_TEAMS } from '../../agents/agent-teams.js';
 import cookieParser from 'cookie-parser';
@@ -924,7 +924,6 @@ export async function createHTTPServer(options: HTTPServerOptions) {
       console.log('[HTTPServer] History built, total messages:', history.length, 'roles:', history.map(m => m.role));
 
       let fullContent = '';
-      const attachments: any[] = [];
 
       // ── 工具调用 & 思考过程收集（用于持久化历史） ───────────────────────────
       // result 截断到 300 字符，避免大文件内容膨胀 sessions.json
