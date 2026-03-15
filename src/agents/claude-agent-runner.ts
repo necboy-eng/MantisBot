@@ -656,7 +656,8 @@ export class ClaudeAgentRunner extends EventEmitter {
   async *streamRun(
     userMessage: string,
     conversationHistory: LLMMessage[] = [],
-    abortSignal?: AbortSignal
+    abortSignal?: AbortSignal,
+    requestOptions?: import('./types.js').StreamRunRequestOptions
   ): AsyncGenerator<StreamChunk> {
     // 创建或复用 AbortController
     if (abortSignal) {
@@ -750,7 +751,15 @@ export class ClaudeAgentRunner extends EventEmitter {
     if (!this.options.activeTeam) {
       const config = getConfig();
       // 优先使用 options.enabledSkills（任务级覆盖），回退到全局配置
-      const enabledSkills = this.options.enabledSkills ?? config.enabledSkills ?? [];
+      // 再合并本次请求的 extraEnabledSkills（如 /plugin:command 触发时临时注入该 plugin 的 skills）
+      const baseEnabledSkills = this.options.enabledSkills ?? config.enabledSkills ?? [];
+      const extraSkills = requestOptions?.extraEnabledSkills ?? [];
+      const enabledSkills = extraSkills.length > 0
+        ? [...new Set([...baseEnabledSkills, ...extraSkills])]
+        : baseEnabledSkills;
+      if (extraSkills.length > 0) {
+        console.log(`[ClaudeAgentRunner] Extra skills injected for this request: ${extraSkills.join(', ')}`);
+      }
 
       // 获取 standalone skill 对象（按 enabledSkills 过滤）
       const standaloneSkillObjs = this.skillsLoader
@@ -758,15 +767,19 @@ export class ClaudeAgentRunner extends EventEmitter {
         : [];
 
       // 获取 plugin skills
+      // 同样按 enabledSkills 过滤：enabledSkills 为空数组时不注入任何 plugin skill
+      // 这与 standalone skills 的行为保持一致，避免 plugin skills 无条件全量注入
       const pluginSkills = getGlobalPluginLoader()?.getSkills() || [];
-      const formattedPluginSkills = pluginSkills.map(s => ({
-        name: s.name,
-        description: s.description,
-        filePath: s.filePath,
-        baseDir: '',
-        source: `plugin:${s.pluginName}`,
-        disableModelInvocation: false,
-      }));
+      const formattedPluginSkills = pluginSkills
+        .filter(s => enabledSkills.includes(s.name))
+        .map(s => ({
+          name: s.name,
+          description: s.description,
+          filePath: s.filePath,
+          baseDir: '',
+          source: `plugin:${s.pluginName}`,
+          disableModelInvocation: false,
+        }));
 
       // 合并后统一格式化为单个 <available_skills> 块
       const allSkills = [...standaloneSkillObjs, ...formattedPluginSkills];
@@ -930,6 +943,15 @@ export class ClaudeAgentRunner extends EventEmitter {
           tools: allMcpTools,
         })
       : null;
+
+    // 输出完整系统提示词到日志（便于调试）
+    console.log('\n' + '='.repeat(80));
+    console.log('[ClaudeAgentRunner] 📋 SYSTEM PROMPT (完整内容):');
+    console.log('='.repeat(80));
+    console.log(systemPrompt);
+    console.log('='.repeat(80));
+    console.log(`[ClaudeAgentRunner] 📊 System prompt length: ${systemPrompt.length} chars`);
+    console.log('='.repeat(80) + '\n');
 
     // 配置选项
     const options: Record<string, unknown> = {

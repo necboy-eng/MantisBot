@@ -36,9 +36,11 @@ const IGNORED_DIRS = new Set([
 ]);
 
 // 扫描配置
-const MAX_DEPTH = 2;  // 最大扫描深度
-const MAX_FILES_PER_DIR = 30;  // 每个目录最多显示的文件数
-const MAX_TOTAL_ITEMS = 100;  // 总共最多显示的项目数
+// 只扫描第一层：目录名 + 第一层文件，让模型按需用 glob/read 工具深入探索
+// 参考 Claude Code CLI 的做法：不预注入目录树，减少 system prompt token 消耗
+const MAX_DEPTH = 2;  // 最大扫描深度（0=仅根目录文件，1=只展开一层子目录名）
+const MAX_FILES_PER_DIR = 10;  // 每个目录最多显示的文件数
+const MAX_TOTAL_ITEMS = 50;   // 总共最多显示的项目数
 
 /**
  * 检测是否在 Docker 容器中运行
@@ -176,7 +178,8 @@ class WorkDirManager {
 
   /**
    * 获取工作目录的上下文摘要（用于注入到系统提示词）
-   * 扫描目录结构，生成轻量级的概览，适合办公场景
+   * 策略：只显示第一层目录名 + 根目录下的直接文件，控制 token 量
+   * 参考 Claude Code CLI：不预注入深层目录树，由模型按需用 glob/read 工具探索
    */
   getWorkDirContext(): string {
     try {
@@ -206,23 +209,25 @@ class WorkDirManager {
         let fileCount = 0;
         for (const entry of filtered) {
           if (totalItems >= MAX_TOTAL_ITEMS) break;
-          if (fileCount >= MAX_FILES_PER_DIR && !entry.isDirectory()) continue;
 
           const isDir = entry.isDirectory();
-          const ext = path.extname(entry.name).toLowerCase();
-          const isOfficeFile = OFFICE_FILE_EXTENSIONS.has(ext) || isDir;
 
-          // 只显示办公相关文件和目录
-          if (!isOfficeFile && !isDir) continue;
-
-          const icon = isDir ? '📁' : this.getFileIcon(ext);
-          lines.push(`${prefix}${icon} ${entry.name}`);
-          totalItems++;
-          fileCount++;
-
-          // 递归扫描子目录
-          if (isDir && depth < MAX_DEPTH) {
-            scanDir(path.join(dirPath, entry.name), depth + 1, prefix + '  ');
+          if (isDir) {
+            // 目录：始终显示名称，但子目录（depth >= 1）只显示名称，不再递归
+            lines.push(`${prefix}📁 ${entry.name}`);
+            totalItems++;
+            if (depth < MAX_DEPTH) {
+              scanDir(path.join(dirPath, entry.name), depth + 1, prefix + '  ');
+            }
+          } else {
+            // 文件：只在根目录层（depth === 0）显示，且只显示办公相关文件
+            if (depth > 0) continue;
+            if (fileCount >= MAX_FILES_PER_DIR) continue;
+            const ext = path.extname(entry.name).toLowerCase();
+            if (!OFFICE_FILE_EXTENSIONS.has(ext)) continue;
+            lines.push(`${prefix}${this.getFileIcon(ext)} ${entry.name}`);
+            totalItems++;
+            fileCount++;
           }
         }
       };

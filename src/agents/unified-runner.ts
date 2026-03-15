@@ -158,7 +158,8 @@ export class UnifiedAgentRunner extends EventEmitter implements IAgentRunner {
   async *streamRun(
     userMessage: string,
     conversationHistory: LLMMessage[] = [],
-    abortSignal?: AbortSignal
+    abortSignal?: AbortSignal,
+    requestOptions?: import('./types.js').StreamRunRequestOptions
   ): AsyncGenerator<StreamChunk> {
     this.abortController = abortSignal ? null : new AbortController();
     const signal = abortSignal || this.abortController?.signal;
@@ -170,9 +171,9 @@ export class UnifiedAgentRunner extends EventEmitter implements IAgentRunner {
     }
 
     if (signal) {
-      yield* this.claudeRunner.streamRun(userMessage, conversationHistory, signal);
+      yield* this.claudeRunner.streamRun(userMessage, conversationHistory, signal, requestOptions);
     } else {
-      yield* this.claudeRunner.streamRun(userMessage, conversationHistory);
+      yield* this.claudeRunner.streamRun(userMessage, conversationHistory, undefined, requestOptions);
     }
   }
 

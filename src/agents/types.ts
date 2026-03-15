@@ -86,6 +86,18 @@ export interface AgentRunnerOptions {
 }
 
 /**
+ * 单次请求级别的运行选项（不修改 runner 全局配置）
+ */
+export interface StreamRunRequestOptions {
+  /**
+   * 在本次请求中额外启用的 skill 名称列表。
+   * 会与 runner 全局的 enabledSkills 合并后注入 system prompt。
+   * 用于 /plugin:command 触发时临时注入该 plugin 的所有 skills。
+   */
+  extraEnabledSkills?: string[];
+}
+
+/**
  * Agent Runner 统一接口
  */
 export interface IAgentRunner {
@@ -98,7 +110,8 @@ export interface IAgentRunner {
   streamRun(
     userMessage: string,
     conversationHistory: import('../types.js').LLMMessage[],
-    abortSignal?: AbortSignal
+    abortSignal?: AbortSignal,
+    requestOptions?: StreamRunRequestOptions
   ): AsyncGenerator<StreamChunk>;
 
   /**

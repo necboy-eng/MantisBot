@@ -745,6 +745,8 @@ export async function createHTTPServer(options: HTTPServerOptions) {
       // 格式: /plugin:command args
       // Plugin command 会将 command 内容作为 prompt 发送给 Agent
       let actualMessage = message;
+      // 记录本次请求触发的 plugin 名称，用于后续自动注入该 plugin 的 skills
+      let activePluginName: string | null = null;
       if (message.startsWith('/') && message.includes(':') && options.pluginLoader) {
         const pluginParsed = options.pluginLoader.parseCommandMessage(message);
         if (pluginParsed) {
@@ -754,6 +756,8 @@ export async function createHTTPServer(options: HTTPServerOptions) {
           if (pluginCommand) {
             // 构建 command prompt（替换占位符并移除 frontmatter）
             actualMessage = options.pluginLoader.buildCommandPrompt(pluginCommand, args);
+            // 记录触发的 plugin，后续 streamRun 时自动注入该 plugin 的所有 skills
+            activePluginName = pluginName;
             console.log(`[HTTPServer] Plugin command: /${pluginName}:${commandName}, args: ${args?.slice(0, 50)}`);
             // 把原始用户消息写入 session（显示给用户）
             options.sessionManager.addMessage(chatId, { role: 'user', content: message });
@@ -1101,7 +1105,13 @@ export async function createHTTPServer(options: HTTPServerOptions) {
         collectedToolStatus = [];
 
         try {
-          for await (const chunk of currentRunner.streamRun(contextualMessage, history)) {
+          // 如果本次请求是由 /plugin:command 触发，自动将该 plugin 的所有 skills 临时注入
+          // 这样 command 执行时模型能看到该 plugin 的完整 skills 上下文
+          const extraEnabledSkills: string[] = activePluginName && options.pluginLoader
+            ? options.pluginLoader.getPlugin(activePluginName)?.skills.map(s => s.name) ?? []
+            : [];
+
+          for await (const chunk of currentRunner.streamRun(contextualMessage, history, undefined, { extraEnabledSkills })) {
             const chunkAny = chunk as any;
 
             // 思考过程事件 - 流式输出思考内容

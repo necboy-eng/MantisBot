@@ -65,21 +65,24 @@ export function refreshSkillsPrompt(): void {
   console.log(`[LLMClient] Standalone skills: ${standaloneSkillObjs.map(s => s.name).join(', ') || '(none)'}`);
 
   // 获取 plugin skills，转换为 pi-coding-agent 格式
+  // 获取 plugin skills，同样按 enabledSkills 过滤，与 standalone skills 行为一致
   const pluginLoader = getGlobalPluginLoader();
   const pluginSkills = pluginLoader?.getSkills() || [];
-  console.log(`[LLMClient] Plugin skills count: ${pluginSkills.length}`);
-  if (pluginSkills.length > 0) {
-    console.log(`[LLMClient] Plugin skills: ${pluginSkills.map(s => s.name).join(', ')}`);
-  }
+  console.log(`[LLMClient] Plugin skills count (total): ${pluginSkills.length}`);
 
-  const formattedPluginSkills = pluginSkills.map(s => ({
-    name: s.name,
-    description: s.description,
-    filePath: s.filePath,
-    baseDir: '',
-    source: `plugin:${s.pluginName}`,
-    disableModelInvocation: false,
-  }));
+  const formattedPluginSkills = pluginSkills
+    .filter(s => enabledSkills.includes(s.name))
+    .map(s => ({
+      name: s.name,
+      description: s.description,
+      filePath: s.filePath,
+      baseDir: '',
+      source: `plugin:${s.pluginName}`,
+      disableModelInvocation: false,
+    }));
+  if (formattedPluginSkills.length > 0) {
+    console.log(`[LLMClient] Plugin skills (enabled): ${formattedPluginSkills.map(s => s.name).join(', ')}`);
+  }
 
   // 合并后统一格式化为单个 <available_skills> 块，避免出现多个同名 XML 块
   const allSkills = [...standaloneSkillObjs, ...formattedPluginSkills];
@@ -516,6 +519,15 @@ export class LLMClient {
 
     // 获取系统提示词（在重试外部获取，避免重复调用）
     const systemPrompt = customSystemPrompt || await getSystemPrompt(tools);
+
+    // 输出完整系统提示词到日志（便于调试）
+    console.log('\n' + '='.repeat(80));
+    console.log('[LLMClient] 📋 SYSTEM PROMPT (完整内容):');
+    console.log('='.repeat(80));
+    console.log(systemPrompt);
+    console.log('='.repeat(80));
+    console.log(`[LLMClient] 📊 System prompt length: ${systemPrompt.length} chars`);
+    console.log('='.repeat(80) + '\n');
 
     try {
       // 使用 withRetry 包装 API 调用
